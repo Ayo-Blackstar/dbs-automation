@@ -8,6 +8,9 @@ app.use('/stripe', stripeRoutes);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const payitmonthlyRoutes = require('./routes/payitmonthly');
+app.use('/payitmonthly', payitmonthlyRoutes);
+
 app.get('/', (req, res) => {
   res.json({ status: 'DBS Automation is running' });
 });
