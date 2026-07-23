@@ -10,9 +10,11 @@ app.use(express.urlencoded({ extended: true }));
 
 const payitmonthlyRoutes = require('./routes/payitmonthly');
 const ghlRoutes = require('./routes/ghl');
+const typeformRoutes = require('./routes/typeform');
 
 app.use('/payitmonthly', payitmonthlyRoutes);
 app.use('/ghl', ghlRoutes);
+app.use('/typeform', typeformRoutes);
 
 app.get('/', (req, res) => {
   res.json({ status: 'DBS Automation is running' });
