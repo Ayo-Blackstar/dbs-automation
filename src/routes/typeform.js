@@ -102,7 +102,7 @@ router.post('/webhook', async (req, res) => {
       if (titleLower.includes('last name')) lastName = value;
       if (titleLower.includes('how did you hear')) source = value;
 
-      // Gold lead logic - income above £35k
+      // Gold lead - income above £35k
       if (titleLower.includes('earning') || titleLower.includes('income') || titleLower.includes('salary')) {
         const valueLower = value.toLowerCase();
         if (
@@ -116,17 +116,24 @@ router.post('/webhook', async (req, res) => {
         }
       }
 
-      // Gold lead logic - credit score above 700
+      // Gold lead - credit score above 600
       if (titleLower.includes('credit score') || titleLower.includes('experian')) {
         const valueLower = value.toLowerCase();
-        if (valueLower.includes('800') || valueLower.includes('701') || valueLower.includes('700+')) {
+        if (
+          valueLower.includes('800') ||
+          valueLower.includes('701') ||
+          valueLower.includes('700') ||
+          valueLower.includes('601') ||
+          valueLower.includes('600 - 700') ||
+          valueLower.includes('600+') ||
+          (valueLower.includes('600') && !valueLower.includes('below 600') && !valueLower.includes('under 600'))
+        ) {
           isGoldLead = true;
         }
       }
 
-      // Skip calendar booking URLs from message
+      // Skip calendar booking URLs — only show first one
       if (isCalendlyBookingUrl(value)) {
-        // Only add first booking link
         if (calendlyCount === 1) {
           discordFields.push({
             name: 'Call Booking',
