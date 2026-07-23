@@ -167,8 +167,8 @@ router.post('/webhook', async (req, res) => {
     if (hasCalendly) {
       const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
       const title = isGoldLead
-        ? '🥇 New Call Booked - HIGH VALUE'
-        : '📞 New Call Booked';
+        ? '🥇 New Call Booked - £2,997'
+        : '📞 New Call Booked - £1,997';
       const embed = createEmbed(title, discordFields, color);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
     } else {
@@ -181,7 +181,7 @@ router.post('/webhook', async (req, res) => {
         });
       }
       const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
-      const title = isGoldLead ? '🥇 New Lead - HIGH VALUE' : 'New Lead Optin';
+      const title = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
       const embed = createEmbed(title, discordFields, color);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
     }
