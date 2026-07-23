@@ -16,31 +16,49 @@ function buildPaymentFields(data) {
 
 router.post('/webhook', async (req, res) => {
   try {
+    console.log('Pay it Monthly payload:', JSON.stringify(req.body));
     const payload = req.body;
-    const notification = payload.notification || {};
-    const application = payload.application || {};
+
+    // Handle different payload structures
+    const notification = payload.notification || payload.data?.notification || {};
+    const application = payload.application || payload.data?.application || payload.data || {};
+    const reference = payload.reference || payload.data?.reference || 'N/A';
+
+    const status = (
+      notification.new_status ||
+      notification.sub_type ||
+      payload.type ||
+      payload.event ||
+      ''
+    ).toUpperCase();
 
     const data = {
-      name: application.customer_name || 'N/A',
-      amount: application.amount ? `£${application.amount}` : 'N/A',
-      email: application.email || 'N/A',
-      phone: application.phone || 'N/A',
-      product: application.product_name || 'N/A',
-      reference: payload.reference || 'N/A',
-      status: notification.new_status || notification.sub_type || 'N/A',
+      name: application.customer_name || application.name || payload.customer_name || 'N/A',
+      amount: application.amount ? `£${application.amount}` :
+              application.financed_amount ? `£${application.financed_amount}` : 'N/A',
+      email: application.email || application.customer_email || 'N/A',
+      phone: application.phone || application.customer_phone || 'N/A',
+      product: application.product_name || application.description || 'DBS Finance',
+      reference,
+      status: status || 'N/A',
     };
 
     const fields = buildPaymentFields(data);
-    const status = (notification.new_status || '').toUpperCase();
 
-    if (status === 'ACCEPTED' || status === 'APPROVED' || status === 'COMPLETED') {
+    if (status === 'ACCEPTED' || status === 'APPROVED' || status === 'COMPLETED' || status === 'SIGNED') {
       const embed = createEmbed('✅ Pay it Monthly - Approved', fields, COLORS.GOLD);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_PAYMENTS, embed);
-    } else if (status === 'DECLINED' || status === 'EXPIRED' || status === 'CANCELLED' || status === 'FAILED') {
+    } else if (
+      status === 'DECLINED' || status === 'EXPIRED' || 
+      status === 'CANCELLED' || status === 'FAILED' ||
+      status === 'REFERRED'
+    ) {
       const embed = createEmbed('❌ Pay it Monthly - Failed/Declined', fields, COLORS.RED);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
     } else {
-      const embed = createEmbed(`💼 Pay it Monthly - ${status}`, fields, COLORS.BLUE);
+      // Log unknown statuses so we can handle them
+      console.log('Unknown Pay it Monthly status:', status, 'Full payload:', JSON.stringify(payload));
+      const embed = createEmbed(`💼 Pay it Monthly - ${status || 'Update'}`, fields, COLORS.BLUE);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_PAYMENTS, embed);
     }
 
