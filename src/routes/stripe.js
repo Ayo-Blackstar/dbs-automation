@@ -13,16 +13,28 @@ function buildPaymentFields(data) {
   ];
 }
 
+function extractProductName(obj) {
+  // Try metadata first
+  if (obj.metadata?.product_name) return obj.metadata.product_name;
+  if (obj.metadata?.description) return obj.metadata.description;
+  // Try description but clean it up
+  if (obj.description) {
+    const desc = obj.description;
+    // Remove invoice/payment schedule IDs
+    if (desc.toLowerCase().includes('invoiceid') || desc.toLowerCase().includes('paymentscheduleid')) {
+      return 'DBS Payment';
+    }
+    return desc;
+  }
+  return 'DBS Payment';
+}
+
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error('Stripe signature error:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -30,14 +42,15 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
   try {
     const obj = event.data.object;
-    const amount = obj.amount ? `£${(obj.amount / 100).toFixed(2)}` : 'N/A';
+    const amount = obj.amount ? `£${(obj.amount / 100).toFixed(2)}` : 
+                   obj.amount_received ? `£${(obj.amount_received / 100).toFixed(2)}` : 'N/A';
 
     const data = {
-      name: obj.billing_details?.name || obj.customer_details?.name || 'N/A',
+      name: obj.billing_details?.name || obj.customer_details?.name || obj.shipping?.name || 'N/A',
       amount,
-      email: obj.billing_details?.email || obj.customer_details?.email || 'N/A',
+      email: obj.billing_details?.email || obj.customer_details?.email || obj.receipt_email || 'N/A',
       phone: obj.billing_details?.phone || obj.customer_details?.phone || 'N/A',
-      product: obj.description || obj.metadata?.product_name || 'N/A',
+      product: extractProductName(obj),
     };
 
     const fields = buildPaymentFields(data);
