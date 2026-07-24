@@ -2,6 +2,26 @@ const express = require('express');
 const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
 
+// Deduplication cache
+const processedResponses = new Map();
+const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function isDuplicate(responseId) {
+  const now = Date.now();
+  if (processedResponses.has(responseId)) {
+    const timestamp = processedResponses.get(responseId);
+    if (now - timestamp < DEDUP_WINDOW_MS) {
+      console.log(`Duplicate Typeform response blocked: ${responseId}`);
+      return true;
+    }
+  }
+  processedResponses.set(responseId, now);
+  for (const [k, t] of processedResponses.entries()) {
+    if (now - t > DEDUP_WINDOW_MS) processedResponses.delete(k);
+  }
+  return false;
+}
+
 function abbreviateTitle(title) {
   const map = {
     'how long have you been living in the uk': 'UK Residency',
@@ -82,6 +102,13 @@ function checkGoldLead(answers, fields_def) {
 router.post('/webhook', async (req, res) => {
   try {
     const payload = req.body;
+    const responseId = payload.form_response?.token || payload.event_id || '';
+
+    // Block duplicate responses
+    if (responseId && isDuplicate(responseId)) {
+      return res.json({ success: true, skipped: 'duplicate' });
+    }
+
     const answers = payload.form_response?.answers || [];
     const fields_def = payload.form_response?.definition?.fields || [];
     const hidden = payload.form_response?.hidden || {};
@@ -89,13 +116,10 @@ router.post('/webhook', async (req, res) => {
     const isGoldLead = checkGoldLead(answers, fields_def);
     const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
 
-    // Build fields WITHOUT calendly link (for new leads)
     const newLeadFields = [];
-    // Build fields WITH calendly link (for call booked)
     const bookedCallFields = [];
 
     let hasCalendly = false;
-    let calendlyCount = 0;
     let calendlyValue = '';
 
     const now = new Date().toLocaleDateString('en-GB');
@@ -131,25 +155,28 @@ router.post('/webhook', async (req, res) => {
           value = String(answer.number) || '';
           break;
         case 'calendly':
-          hasCalendly = true;
-          calendlyCount++;
-          calendlyValue = answer.url || 'Call Booked ✅';
-          return; // Skip from both fields for now
+          if (!hasCalendly) {
+            hasCalendly = true;
+            calendlyValue = answer.url || 'Call Booked ✅';
+          }
+          return;
         case 'url':
           value = answer.url || '';
           if (isCalendlyBookingUrl(value)) {
-            hasCalendly = true;
-            calendlyCount++;
-            calendlyValue = value;
-            return; // Skip from both fields for now
+            if (!hasCalendly) {
+              hasCalendly = true;
+              calendlyValue = value;
+            }
+            return;
           }
           break;
         default:
           value = answer.url || answer.text || answer.email || '';
           if (isCalendlyBookingUrl(value)) {
-            hasCalendly = true;
-            calendlyCount++;
-            calendlyValue = value;
+            if (!hasCalendly) {
+              hasCalendly = true;
+              calendlyValue = value;
+            }
             return;
           }
       }
@@ -187,12 +214,12 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Always send to new leads (without calendly link)
+    // Always send to new leads
     const newLeadTitle = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
     const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
 
-    // Also send to call booked if booking present (with calendly link)
+    // Also send to call booked if booking present
     if (hasCalendly) {
       const bookedTitle = isGoldLead ? '🥇 New Call Booked - £2,997' : '📞 New Call Booked - £1,997';
       const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
