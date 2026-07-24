@@ -2,10 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
 
-function isCalendlyBookingUrl(value) {
-  return value && value.includes('calendly.com') && value.includes('invitees');
-}
-
 function checkGoldLeadByValue(value) {
   const valueLower = value.toLowerCase();
   if (
@@ -49,8 +45,6 @@ router.post('/webhook', async (req, res) => {
 
     const discordFields = [];
     let isGoldLead = false;
-    let hasCalendly = false;
-    let calendlyCount = 0;
 
     const now = new Date().toLocaleDateString('en-GB');
     discordFields.push({ name: 'Time', value: now, inline: true });
@@ -83,28 +77,16 @@ router.post('/webhook', async (req, res) => {
           value = String(answer.number) || '';
           break;
         case 'calendly':
-          hasCalendly = true;
-          calendlyCount++;
-          value = answer.url || 'Call Booked ✅';
-          break;
         case 'url':
-          value = answer.url || '';
-          if (isCalendlyBookingUrl(value)) {
-            hasCalendly = true;
-            calendlyCount++;
-          }
-          break;
+          // Skip calendly/url fields entirely
+          return;
         default:
           value = answer.url || answer.text || answer.email || '';
-          if (isCalendlyBookingUrl(value)) {
-            hasCalendly = true;
-            calendlyCount++;
-          }
       }
 
       const titleLower = fieldTitle.toLowerCase();
 
-      // Check gold lead by field type
+      // Gold lead - income/work circumstances
       if (
         titleLower.includes('earning') ||
         titleLower.includes('income') ||
@@ -121,25 +103,13 @@ router.post('/webhook', async (req, res) => {
         isGoldLead = true;
       }
 
-      // Credit score check
+      // Gold lead - credit score above 600
       if (
         titleLower.includes('credit score') ||
         titleLower.includes('experian') ||
         titleLower.includes('credit')
       ) {
         if (checkGoldLeadByCreditScore(value)) isGoldLead = true;
-      }
-
-      // Skip calendar booking URLs — only show first one
-      if (isCalendlyBookingUrl(value)) {
-        if (calendlyCount === 1) {
-          discordFields.push({
-            name: 'Call Booking',
-            value: String(value).substring(0, 1024),
-            inline: true
-          });
-        }
-        return;
       }
 
       if (value) {
@@ -162,19 +132,11 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    if (hasCalendly) {
-      const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
-      const title = isGoldLead
-        ? '🥇 New Call Booked - £2,997'
-        : '📞 New Call Booked - £1,997';
-      const embed = createEmbed(title, discordFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
-    } else {
-      const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
-      const title = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
-      const embed = createEmbed(title, discordFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
-    }
+    // Always send to new leads channel
+    const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
+    const title = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
+    const embed = createEmbed(title, discordFields, color);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
 
     res.json({ success: true });
   } catch (err) {
