@@ -1,28 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
-const axios = require('axios');
-
-async function createGHLContact(contactData) {
-  try {
-    const response = await axios.post(
-      'https://services.leadconnectorhq.com/contacts/',
-      contactData,
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Version': '2021-07-28'
-        }
-      }
-    );
-    console.log('GHL contact created:', response.data?.contact?.id);
-    return response.data?.contact;
-  } catch (err) {
-    console.error('GHL contact error:', err.response?.status, JSON.stringify(err.response?.data));
-    return null;
-  }
-}
 
 function isCalendlyBookingUrl(value) {
   return value && value.includes('calendly.com') && value.includes('invitees');
@@ -30,7 +8,6 @@ function isCalendlyBookingUrl(value) {
 
 function checkGoldLeadByValue(value) {
   const valueLower = value.toLowerCase();
-  // Income above £35k
   if (
     valueLower.includes('earning above £35k') ||
     valueLower.includes('above £35k') ||
@@ -73,11 +50,6 @@ router.post('/webhook', async (req, res) => {
     const discordFields = [];
     let isGoldLead = false;
     let hasCalendly = false;
-    let firstName = '';
-    let lastName = '';
-    let phone = '';
-    let email = '';
-    let source = '';
     let calendlyCount = 0;
 
     const now = new Date().toLocaleDateString('en-GB');
@@ -94,11 +66,9 @@ router.post('/webhook', async (req, res) => {
           break;
         case 'email':
           value = answer.email || '';
-          email = value;
           break;
         case 'phone_number':
           value = answer.phone_number || '';
-          phone = value;
           break;
         case 'choice':
           value = answer.choice?.label || '';
@@ -133,9 +103,6 @@ router.post('/webhook', async (req, res) => {
       }
 
       const titleLower = fieldTitle.toLowerCase();
-      if (titleLower.includes('first name')) firstName = value;
-      if (titleLower.includes('last name')) lastName = value;
-      if (titleLower.includes('how did you hear')) source = value;
 
       // Check gold lead by field type
       if (
@@ -203,14 +170,6 @@ router.post('/webhook', async (req, res) => {
       const embed = createEmbed(title, discordFields, color);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
     } else {
-      if (firstName || email || phone) {
-        await createGHLContact({
-          firstName, lastName, email, phone,
-          locationId: process.env.GHL_LOCATION_ID,
-          source: source || 'Typeform',
-          tags: ['typeform-lead'],
-        });
-      }
       const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
       const title = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
       const embed = createEmbed(title, discordFields, color);
