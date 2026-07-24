@@ -2,38 +2,85 @@ const express = require('express');
 const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
 
-function checkGoldLeadByValue(value) {
-  const valueLower = value.toLowerCase();
-  if (
-    valueLower.includes('earning above £35k') ||
-    valueLower.includes('above £35k') ||
-    valueLower.includes('35k') ||
-    valueLower.includes('40k') ||
-    valueLower.includes('45k') ||
-    valueLower.includes('50k') ||
-    valueLower.includes('60k') ||
-    valueLower.includes('over £35') ||
-    (valueLower.includes('above') && valueLower.includes('35'))
-  ) {
-    return true;
+function abbreviateTitle(title) {
+  const map = {
+    'how long have you been living in the uk': 'UK Residency',
+    'why are you considering changing your career': 'Reason for Change',
+    'what best describes your work circumstances': 'Work Circumstances',
+    'the investment for our program is': 'Investment',
+    'to be approved for a 12-month payment plan': 'Credit Score',
+    'if you are accepted into our training program': 'Start Timeline',
+    'first name': 'First Name',
+    'last name': 'Last Name',
+    'phone': 'Phone',
+    'email': 'Email',
+  };
+
+  const lower = title.toLowerCase();
+  for (const [key, val] of Object.entries(map)) {
+    if (lower.includes(key)) return val;
   }
-  return false;
+  return title;
 }
 
-function checkGoldLeadByCreditScore(value) {
-  const valueLower = value.toLowerCase();
-  if (
-    valueLower.includes('800') ||
-    valueLower.includes('701') ||
-    valueLower.includes('700') ||
-    valueLower.includes('601') ||
-    valueLower.includes('600 - 700') ||
-    valueLower.includes('600+') ||
-    (valueLower.includes('600') && !valueLower.includes('below 600') && !valueLower.includes('under 600'))
-  ) {
-    return true;
-  }
-  return false;
+function isCalendlyBookingUrl(value) {
+  return value && value.includes('calendly.com') && value.includes('invitees');
+}
+
+function checkGoldLead(answers, fields_def) {
+  let hasHighIncome = false;
+  let hasInvestment = false;
+  let hasGoodCreditScore = false;
+
+  answers.forEach((answer, index) => {
+    const fieldDef = fields_def[index];
+    const fieldTitle = (fieldDef?.title || '').toLowerCase();
+    let value = '';
+
+    if (answer.type === 'choice') value = answer.choice?.label || '';
+    else if (answer.type === 'text') value = answer.text || '';
+    else if (answer.type === 'email') value = answer.email || '';
+    else if (answer.type === 'phone_number') value = answer.phone_number || '';
+
+    const valueLower = value.toLowerCase();
+
+    // High income check
+    if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
+      if (
+        valueLower.includes('above £35k') ||
+        valueLower.includes('earning above') ||
+        valueLower.includes('35k') ||
+        valueLower.includes('40k') ||
+        valueLower.includes('50k') ||
+        valueLower.includes('60k')
+      ) {
+        hasHighIncome = true;
+      }
+    }
+
+    // Investment check
+    if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
+      if (valueLower.includes('yes') || valueLower.includes('can invest')) {
+        hasInvestment = true;
+      }
+    }
+
+    // Credit score check - above 600
+    if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
+      if (
+        valueLower.includes('800') ||
+        valueLower.includes('701') ||
+        valueLower.includes('700') ||
+        valueLower.includes('600 - 700') ||
+        (valueLower.includes('600') && !valueLower.includes('below 600'))
+      ) {
+        hasGoodCreditScore = true;
+      }
+    }
+  });
+
+  // Gold if: high income OR (investment yes + good credit score)
+  return hasHighIncome || (hasInvestment && hasGoodCreditScore);
 }
 
 router.post('/webhook', async (req, res) => {
@@ -44,14 +91,18 @@ router.post('/webhook', async (req, res) => {
     const hidden = payload.form_response?.hidden || {};
 
     const discordFields = [];
-    let isGoldLead = false;
+    let hasCalendly = false;
+    let calendlyCount = 0;
+
+    const isGoldLead = checkGoldLead(answers, fields_def);
 
     const now = new Date().toLocaleDateString('en-GB');
     discordFields.push({ name: 'Time', value: now, inline: true });
 
     answers.forEach((answer, index) => {
       const fieldDef = fields_def[index];
-      const fieldTitle = fieldDef?.title || `Question ${index + 1}`;
+      const rawTitle = fieldDef?.title || `Question ${index + 1}`;
+      const fieldTitle = abbreviateTitle(rawTitle);
       let value = '';
 
       switch (answer.type) {
@@ -77,39 +128,35 @@ router.post('/webhook', async (req, res) => {
           value = String(answer.number) || '';
           break;
         case 'calendly':
+          hasCalendly = true;
+          calendlyCount++;
+          value = answer.url || 'Call Booked ✅';
+          break;
         case 'url':
-          // Skip calendly/url fields entirely
-          return;
+          value = answer.url || '';
+          if (isCalendlyBookingUrl(value)) {
+            hasCalendly = true;
+            calendlyCount++;
+          }
+          break;
         default:
           value = answer.url || answer.text || answer.email || '';
+          if (isCalendlyBookingUrl(value)) {
+            hasCalendly = true;
+            calendlyCount++;
+          }
       }
 
-      const titleLower = fieldTitle.toLowerCase();
-
-      // Gold lead - income/work circumstances
-      if (
-        titleLower.includes('earning') ||
-        titleLower.includes('income') ||
-        titleLower.includes('salary') ||
-        titleLower.includes('work circumstances') ||
-        titleLower.includes('circumstances') ||
-        titleLower.includes('situation')
-      ) {
-        if (checkGoldLeadByValue(value)) isGoldLead = true;
-      }
-
-      // Also check ANY choice answer for income keywords
-      if (answer.type === 'choice' && checkGoldLeadByValue(value)) {
-        isGoldLead = true;
-      }
-
-      // Gold lead - credit score above 600
-      if (
-        titleLower.includes('credit score') ||
-        titleLower.includes('experian') ||
-        titleLower.includes('credit')
-      ) {
-        if (checkGoldLeadByCreditScore(value)) isGoldLead = true;
+      // Skip calendar booking URLs — only show first one
+      if (isCalendlyBookingUrl(value)) {
+        if (calendlyCount === 1) {
+          discordFields.push({
+            name: 'Call Booking',
+            value: String(value).substring(0, 1024),
+            inline: true
+          });
+        }
+        return;
       }
 
       if (value) {
@@ -132,11 +179,21 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Always send to new leads channel
     const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
-    const title = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
-    const embed = createEmbed(title, discordFields, color);
-    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
+
+    if (hasCalendly) {
+      const title = isGoldLead
+        ? '🥇 New Call Booked - £2,997'
+        : '📞 New Call Booked - £1,997';
+      const embed = createEmbed(title, discordFields, color);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
+    } else {
+      const title = isGoldLead
+        ? '🥇 New Lead - £2,997'
+        : '📞 New Lead - £1,997';
+      const embed = createEmbed(title, discordFields, color);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
+    }
 
     res.json({ success: true });
   } catch (err) {
