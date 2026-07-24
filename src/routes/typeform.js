@@ -44,7 +44,6 @@ function checkGoldLead(answers, fields_def) {
 
     const valueLower = value.toLowerCase();
 
-    // High income check
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       if (
         valueLower.includes('above £35k') ||
@@ -58,14 +57,12 @@ function checkGoldLead(answers, fields_def) {
       }
     }
 
-    // Investment check
     if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
       if (valueLower.includes('yes') || valueLower.includes('can invest')) {
         hasInvestment = true;
       }
     }
 
-    // Credit score check - above 600
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
         valueLower.includes('800') ||
@@ -79,7 +76,6 @@ function checkGoldLead(answers, fields_def) {
     }
   });
 
-  // Gold if: high income OR (investment yes + good credit score)
   return hasHighIncome || (hasInvestment && hasGoodCreditScore);
 }
 
@@ -90,14 +86,21 @@ router.post('/webhook', async (req, res) => {
     const fields_def = payload.form_response?.definition?.fields || [];
     const hidden = payload.form_response?.hidden || {};
 
-    const discordFields = [];
+    const isGoldLead = checkGoldLead(answers, fields_def);
+    const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
+
+    // Build fields WITHOUT calendly link (for new leads)
+    const newLeadFields = [];
+    // Build fields WITH calendly link (for call booked)
+    const bookedCallFields = [];
+
     let hasCalendly = false;
     let calendlyCount = 0;
-
-    const isGoldLead = checkGoldLead(answers, fields_def);
+    let calendlyValue = '';
 
     const now = new Date().toLocaleDateString('en-GB');
-    discordFields.push({ name: 'Time', value: now, inline: true });
+    newLeadFields.push({ name: 'Time', value: now, inline: true });
+    bookedCallFields.push({ name: 'Time', value: now, inline: true });
 
     answers.forEach((answer, index) => {
       const fieldDef = fields_def[index];
@@ -130,13 +133,15 @@ router.post('/webhook', async (req, res) => {
         case 'calendly':
           hasCalendly = true;
           calendlyCount++;
-          value = answer.url || 'Call Booked ✅';
-          break;
+          calendlyValue = answer.url || 'Call Booked ✅';
+          return; // Skip from both fields for now
         case 'url':
           value = answer.url || '';
           if (isCalendlyBookingUrl(value)) {
             hasCalendly = true;
             calendlyCount++;
+            calendlyValue = value;
+            return; // Skip from both fields for now
           }
           break;
         default:
@@ -144,55 +149,54 @@ router.post('/webhook', async (req, res) => {
           if (isCalendlyBookingUrl(value)) {
             hasCalendly = true;
             calendlyCount++;
+            calendlyValue = value;
+            return;
           }
       }
 
-      // Skip calendar booking URLs — only show first one
-      if (isCalendlyBookingUrl(value)) {
-        if (calendlyCount === 1) {
-          discordFields.push({
-            name: 'Call Booking',
-            value: String(value).substring(0, 1024),
-            inline: true
-          });
-        }
-        return;
-      }
-
       if (value) {
-        discordFields.push({
+        const field = {
           name: fieldTitle.substring(0, 256),
           value: String(value).substring(0, 1024),
           inline: true
-        });
+        };
+        newLeadFields.push(field);
+        bookedCallFields.push(field);
       }
     });
 
-    // Add UTM data if present
+    // Add calendly link ONLY to booked call fields
+    if (hasCalendly && calendlyValue) {
+      bookedCallFields.push({
+        name: 'Call Booking',
+        value: String(calendlyValue).substring(0, 1024),
+        inline: true
+      });
+    }
+
+    // Add UTM data to both
     if (hidden && Object.keys(hidden).length > 0) {
       const utmLines = Object.entries(hidden)
         .filter(([k, v]) => v)
         .map(([k, v]) => `**${k}:** ${v}`)
         .join('\n');
       if (utmLines) {
-        discordFields.push({ name: 'ATTRIBUTION', value: utmLines, inline: false });
+        const utmField = { name: 'ATTRIBUTION', value: utmLines, inline: false };
+        newLeadFields.push(utmField);
+        bookedCallFields.push(utmField);
       }
     }
 
-    const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
+    // Always send to new leads (without calendly link)
+    const newLeadTitle = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
+    const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
 
+    // Also send to call booked if booking present (with calendly link)
     if (hasCalendly) {
-      const title = isGoldLead
-        ? '🥇 New Call Booked - £2,997'
-        : '📞 New Call Booked - £1,997';
-      const embed = createEmbed(title, discordFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
-    } else {
-      const title = isGoldLead
-        ? '🥇 New Lead - £2,997'
-        : '📞 New Lead - £1,997';
-      const embed = createEmbed(title, discordFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
+      const bookedTitle = isGoldLead ? '🥇 New Call Booked - £2,997' : '📞 New Call Booked - £1,997';
+      const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
     }
 
     res.json({ success: true });
