@@ -28,6 +28,41 @@ function isCalendlyBookingUrl(value) {
   return value && value.includes('calendly.com') && value.includes('invitees');
 }
 
+function checkGoldLeadByValue(value) {
+  const valueLower = value.toLowerCase();
+  // Income above £35k
+  if (
+    valueLower.includes('earning above £35k') ||
+    valueLower.includes('above £35k') ||
+    valueLower.includes('35k') ||
+    valueLower.includes('40k') ||
+    valueLower.includes('45k') ||
+    valueLower.includes('50k') ||
+    valueLower.includes('60k') ||
+    valueLower.includes('over £35') ||
+    (valueLower.includes('above') && valueLower.includes('35'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function checkGoldLeadByCreditScore(value) {
+  const valueLower = value.toLowerCase();
+  if (
+    valueLower.includes('800') ||
+    valueLower.includes('701') ||
+    valueLower.includes('700') ||
+    valueLower.includes('601') ||
+    valueLower.includes('600 - 700') ||
+    valueLower.includes('600+') ||
+    (valueLower.includes('600') && !valueLower.includes('below 600') && !valueLower.includes('under 600'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 router.post('/webhook', async (req, res) => {
   try {
     const payload = req.body;
@@ -102,34 +137,30 @@ router.post('/webhook', async (req, res) => {
       if (titleLower.includes('last name')) lastName = value;
       if (titleLower.includes('how did you hear')) source = value;
 
-      // Gold lead - income above £35k
-      if (titleLower.includes('earning') || titleLower.includes('income') || titleLower.includes('salary')) {
-        const valueLower = value.toLowerCase();
-        if (
-          valueLower.includes('35k') || valueLower.includes('£35') ||
-          valueLower.includes('40k') || valueLower.includes('45k') ||
-          valueLower.includes('50k') || valueLower.includes('60k') ||
-          valueLower.includes('over') || valueLower.includes('above') ||
-          valueLower.includes('more than')
-        ) {
-          isGoldLead = true;
-        }
+      // Check gold lead by field type
+      if (
+        titleLower.includes('earning') ||
+        titleLower.includes('income') ||
+        titleLower.includes('salary') ||
+        titleLower.includes('work circumstances') ||
+        titleLower.includes('circumstances') ||
+        titleLower.includes('situation')
+      ) {
+        if (checkGoldLeadByValue(value)) isGoldLead = true;
       }
 
-      // Gold lead - credit score above 600
-      if (titleLower.includes('credit score') || titleLower.includes('experian')) {
-        const valueLower = value.toLowerCase();
-        if (
-          valueLower.includes('800') ||
-          valueLower.includes('701') ||
-          valueLower.includes('700') ||
-          valueLower.includes('601') ||
-          valueLower.includes('600 - 700') ||
-          valueLower.includes('600+') ||
-          (valueLower.includes('600') && !valueLower.includes('below 600') && !valueLower.includes('under 600'))
-        ) {
-          isGoldLead = true;
-        }
+      // Also check ANY choice answer for income keywords
+      if (answer.type === 'choice' && checkGoldLeadByValue(value)) {
+        isGoldLead = true;
+      }
+
+      // Credit score check
+      if (
+        titleLower.includes('credit score') ||
+        titleLower.includes('experian') ||
+        titleLower.includes('credit')
+      ) {
+        if (checkGoldLeadByCreditScore(value)) isGoldLead = true;
       }
 
       // Skip calendar booking URLs — only show first one
