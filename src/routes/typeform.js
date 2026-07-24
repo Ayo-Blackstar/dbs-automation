@@ -4,14 +4,14 @@ const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
 
 // Deduplication cache
 const processedResponses = new Map();
-const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function isDuplicate(responseId) {
   const now = Date.now();
   if (processedResponses.has(responseId)) {
     const timestamp = processedResponses.get(responseId);
     if (now - timestamp < DEDUP_WINDOW_MS) {
-      console.log(`Duplicate Typeform response blocked: ${responseId}`);
+      console.log(`Duplicate blocked: ${responseId}`);
       return true;
     }
   }
@@ -49,7 +49,6 @@ function isCalendlyBookingUrl(value) {
 
 function checkGoldLead(answers, fields_def) {
   let hasHighIncome = false;
-  let hasInvestment = false;
   let hasGoodCreditScore = false;
 
   answers.forEach((answer, index) => {
@@ -64,39 +63,39 @@ function checkGoldLead(answers, fields_def) {
 
     const valueLower = value.toLowerCase();
 
+    // High income check - above £35k
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       if (
         valueLower.includes('above £35k') ||
         valueLower.includes('earning above') ||
         valueLower.includes('35k') ||
         valueLower.includes('40k') ||
+        valueLower.includes('45k') ||
         valueLower.includes('50k') ||
-        valueLower.includes('60k')
+        valueLower.includes('60k') ||
+        valueLower.includes('over £35')
       ) {
         hasHighIncome = true;
       }
     }
 
-    if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
-      if (valueLower.includes('yes') || valueLower.includes('can invest')) {
-        hasInvestment = true;
-      }
-    }
-
+    // Credit score check - ONLY above 600 (600-700, 701-800, 800+)
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
+        valueLower.includes('800+') ||
         valueLower.includes('800') ||
+        valueLower.includes('701 - 800') ||
         valueLower.includes('701') ||
-        valueLower.includes('700') ||
-        valueLower.includes('600 - 700') ||
-        (valueLower.includes('600') && !valueLower.includes('below 600'))
+        valueLower.includes('600 - 700')
       ) {
         hasGoodCreditScore = true;
       }
+      // NOT matching: 'below 600', 'i don't have a credit score'
     }
   });
 
-  return hasHighIncome || (hasInvestment && hasGoodCreditScore);
+  // Gold if: high income OR good credit score
+  return hasHighIncome || hasGoodCreditScore;
 }
 
 router.post('/webhook', async (req, res) => {
@@ -104,7 +103,6 @@ router.post('/webhook', async (req, res) => {
     const payload = req.body;
     const responseId = payload.form_response?.token || payload.event_id || '';
 
-    // Block duplicate responses
     if (responseId && isDuplicate(responseId)) {
       return res.json({ success: true, skipped: 'duplicate' });
     }
@@ -114,7 +112,7 @@ router.post('/webhook', async (req, res) => {
     const hidden = payload.form_response?.hidden || {};
 
     const isGoldLead = checkGoldLead(answers, fields_def);
-    const color = isGoldLead ? COLORS.GOLD : COLORS.BLUE;
+    const color = isGoldLead ? COLORS.GREEN : COLORS.BLUE;
 
     const newLeadFields = [];
     const bookedCallFields = [];
@@ -215,13 +213,13 @@ router.post('/webhook', async (req, res) => {
     }
 
     // Always send to new leads
-    const newLeadTitle = isGoldLead ? '🥇 New Lead - £2,997' : '📞 New Lead - £1,997';
+    const newLeadTitle = isGoldLead ? '🟢 New Lead - £2,997' : '📞 New Lead - £1,997';
     const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
 
     // Also send to call booked if booking present
     if (hasCalendly) {
-      const bookedTitle = isGoldLead ? '🥇 New Call Booked - £2,997' : '📞 New Call Booked - £1,997';
+      const bookedTitle = isGoldLead ? '🟢 New Call Booked - £2,997' : '📞 New Call Booked - £1,997';
       const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
     }
