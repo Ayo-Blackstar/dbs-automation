@@ -54,6 +54,7 @@ function determineLeadTier(answers, fields_def) {
   let lastName = '';
   let email = '';
   let phone = '';
+  let workCircumstances = '';
 
   answers.forEach((answer, index) => {
     const fieldDef = fields_def[index];
@@ -73,6 +74,7 @@ function determineLeadTier(answers, fields_def) {
     if (fieldTitle.includes('phone')) phone = value;
 
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
+      workCircumstances = value;
       if (
         valueLower.includes('above £35k') ||
         valueLower.includes('earning above') ||
@@ -107,11 +109,11 @@ function determineLeadTier(answers, fields_def) {
   });
 
   if (hasHighIncome) {
-    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', firstName, lastName, email, phone };
+    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
   } else if (hasInvestment && hasGoodCreditScore) {
-    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£2,997', firstName, lastName, email, phone };
+    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
   } else {
-    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', firstName, lastName, email, phone };
+    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
   }
 }
 
@@ -136,11 +138,15 @@ async function createGHLContact(contactData) {
   }
 }
 
-async function createGHLOpportunity(contact) {
+async function createGHLOpportunity(contact, tier) {
   try {
     const pipelineId = process.env.GHL_PIPELINE_ID;
     const stageId = process.env.GHL_PIPELINE_STAGE_ID;
     if (!pipelineId || !stageId || !contact?.id) return;
+
+    const opportunityValue = tier.opportunityValue;
+    const source = tier.source;
+    const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email;
 
     await axios.post(
       'https://services.leadconnectorhq.com/opportunities/',
@@ -148,9 +154,11 @@ async function createGHLOpportunity(contact) {
         pipelineId,
         pipelineStageId: stageId,
         contactId: contact.id,
-        name: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email,
+        name,
         locationId: process.env.GHL_LOCATION_ID,
         status: 'open',
+        monetaryValue: opportunityValue,
+        source,
       },
       {
         headers: {
@@ -179,7 +187,8 @@ router.post('/webhook', async (req, res) => {
     const fields_def = payload.form_response?.definition?.fields || [];
     const hidden = payload.form_response?.hidden || {};
 
-    const { tier, color, prefix, price, firstName, lastName, email, phone } = determineLeadTier(answers, fields_def);
+    const tierData = determineLeadTier(answers, fields_def);
+    const { tier, color, prefix, price, firstName, lastName, email, phone } = tierData;
 
     const newLeadFields = [];
     const bookedCallFields = [];
@@ -290,7 +299,7 @@ router.post('/webhook', async (req, res) => {
         tags: ['typeform-lead'],
       });
       if (contact) {
-        await createGHLOpportunity(contact);
+        await createGHLOpportunity(contact, tierData);
       }
     }
 
