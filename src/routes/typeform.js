@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
+const axios = require('axios');
 
-// Deduplication cache
 const processedResponses = new Map();
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -35,7 +35,6 @@ function abbreviateTitle(title) {
     'phone': 'Phone',
     'email': 'Email',
   };
-
   const lower = title.toLowerCase();
   for (const [key, val] of Object.entries(map)) {
     if (lower.includes(key)) return val;
@@ -47,9 +46,14 @@ function isCalendlyBookingUrl(value) {
   return value && value.includes('calendly.com') && value.includes('invitees');
 }
 
-function checkGoldLead(answers, fields_def) {
+function determineLeadTier(answers, fields_def) {
   let hasHighIncome = false;
+  let hasInvestment = false;
   let hasGoodCreditScore = false;
+  let firstName = '';
+  let lastName = '';
+  let email = '';
+  let phone = '';
 
   answers.forEach((answer, index) => {
     const fieldDef = fields_def[index];
@@ -63,7 +67,12 @@ function checkGoldLead(answers, fields_def) {
 
     const valueLower = value.toLowerCase();
 
-    // High income check - above £35k
+    if (fieldTitle.includes('first name')) firstName = value;
+    if (fieldTitle.includes('last name')) lastName = value;
+    if (fieldTitle.includes('email')) email = value;
+    if (fieldTitle.includes('phone')) phone = value;
+
+    // High income - above £35k
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       if (
         valueLower.includes('above £35k') ||
@@ -79,7 +88,14 @@ function checkGoldLead(answers, fields_def) {
       }
     }
 
-    // Credit score check - ONLY above 600 (600-700, 701-800, 800+)
+    // Investment check - must say YES
+    if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
+      if (valueLower.includes('yes') || valueLower.includes('can invest')) {
+        hasInvestment = true;
+      }
+    }
+
+    // Credit score - only 600+
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
         valueLower.includes('800+') ||
@@ -90,12 +106,68 @@ function checkGoldLead(answers, fields_def) {
       ) {
         hasGoodCreditScore = true;
       }
-      // NOT matching: 'below 600', 'i don't have a credit score'
     }
   });
 
-  // Gold if: high income OR good credit score
-  return hasHighIncome || hasGoodCreditScore;
+  // Determine tier
+  if (hasHighIncome) {
+    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', firstName, lastName, email, phone };
+  } else if (hasInvestment && hasGoodCreditScore) {
+    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£2,997', firstName, lastName, email, phone };
+  } else {
+    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', firstName, lastName, email, phone };
+  }
+}
+
+async function createGHLContact(contactData) {
+  try {
+    const response = await axios.post(
+      'https://services.leadconnectorhq.com/contacts/',
+      contactData,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+          'Content-Type': 'application/json',
+          'Version': '2021-07-28'
+        }
+      }
+    );
+    console.log('GHL contact created:', response.data?.contact?.id);
+    return response.data?.contact;
+  } catch (err) {
+    console.error('GHL contact error:', err.response?.status, JSON.stringify(err.response?.data));
+    return null;
+  }
+}
+
+async function createGHLOpportunity(contact) {
+  try {
+    const pipelineId = process.env.GHL_PIPELINE_ID;
+    const stageId = process.env.GHL_PIPELINE_STAGE_ID;
+    if (!pipelineId || !stageId || !contact?.id) return;
+
+    await axios.post(
+      'https://services.leadconnectorhq.com/opportunities/',
+      {
+        pipelineId,
+        pipelineStageId: stageId,
+        contactId: contact.id,
+        name: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email,
+        locationId: process.env.GHL_LOCATION_ID,
+        status: 'open',
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+          'Content-Type': 'application/json',
+          'Version': '2021-07-28'
+        }
+      }
+    );
+    console.log('GHL opportunity created successfully');
+  } catch (err) {
+    console.error('GHL opportunity error:', err.response?.status, JSON.stringify(err.response?.data));
+  }
 }
 
 router.post('/webhook', async (req, res) => {
@@ -111,12 +183,10 @@ router.post('/webhook', async (req, res) => {
     const fields_def = payload.form_response?.definition?.fields || [];
     const hidden = payload.form_response?.hidden || {};
 
-    const isGoldLead = checkGoldLead(answers, fields_def);
-    const color = isGoldLead ? COLORS.GREEN : COLORS.BLUE;
+    const { tier, color, prefix, price, firstName, lastName, email, phone } = determineLeadTier(answers, fields_def);
 
     const newLeadFields = [];
     const bookedCallFields = [];
-
     let hasCalendly = false;
     let calendlyValue = '';
 
@@ -212,14 +282,30 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
+    // Create GHL contact and opportunity
+    if (firstName || email || phone) {
+      const contact = await createGHLContact({
+        firstName,
+        lastName,
+        email,
+        phone,
+        locationId: process.env.GHL_LOCATION_ID,
+        source: 'Typeform',
+        tags: ['typeform-lead'],
+      });
+      if (contact) {
+        await createGHLOpportunity(contact);
+      }
+    }
+
     // Always send to new leads
-    const newLeadTitle = isGoldLead ? '🟢 New Lead - £2,997' : '📞 New Lead - £1,997';
+    const newLeadTitle = `${prefix} New Lead - ${price}`;
     const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
 
     // Also send to call booked if booking present
     if (hasCalendly) {
-      const bookedTitle = isGoldLead ? '🟢 New Call Booked - £2,997' : '📞 New Call Booked - £1,997';
+      const bookedTitle = `${prefix} New Call Booked - ${price}`;
       const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
     }
