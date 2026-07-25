@@ -3,21 +3,23 @@ const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
 const axios = require('axios');
 
-const processedResponses = new Map();
-const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Email-based deduplication - 5 minutes
+const processedEmails = new Map();
+const DEDUP_WINDOW_MS = 5 * 60 * 1000;
 
-function isDuplicate(responseId) {
+function isDuplicateEmail(email) {
+  if (!email) return false;
   const now = Date.now();
-  if (processedResponses.has(responseId)) {
-    const timestamp = processedResponses.get(responseId);
+  if (processedEmails.has(email)) {
+    const timestamp = processedEmails.get(email);
     if (now - timestamp < DEDUP_WINDOW_MS) {
-      console.log(`Duplicate blocked: ${responseId}`);
+      console.log(`Duplicate email blocked: ${email}`);
       return true;
     }
   }
-  processedResponses.set(responseId, now);
-  for (const [k, t] of processedResponses.entries()) {
-    if (now - t > DEDUP_WINDOW_MS) processedResponses.delete(k);
+  processedEmails.set(email, now);
+  for (const [k, t] of processedEmails.entries()) {
+    if (now - t > DEDUP_WINDOW_MS) processedEmails.delete(k);
   }
   return false;
 }
@@ -73,7 +75,6 @@ function determineLeadTier(answers, fields_def) {
     if (fieldTitle.includes('email')) email = value;
     if (fieldTitle.includes('phone')) phone = value;
 
-    // High income - above £35k
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       workCircumstances = value;
       if (
@@ -90,14 +91,12 @@ function determineLeadTier(answers, fields_def) {
       }
     }
 
-    // Investment - must say YES
     if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
       if (valueLower.includes('yes') || valueLower.includes('can invest')) {
         hasInvestment = true;
       }
     }
 
-    // Credit score - only 600+
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
         valueLower.includes('800+') ||
@@ -111,18 +110,13 @@ function determineLeadTier(answers, fields_def) {
     }
   });
 
-  // Tier logic per Ayo's specification
   if (hasHighIncome) {
-    // Above £35k → Gold £2,997
     return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
   } else if (hasInvestment && hasGoodCreditScore) {
-    // Below £35k + Yes investment + credit 600+ → Gold £1,997
     return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£1,997', opportunityValue: 1997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
   } else if (hasInvestment && !hasGoodCreditScore) {
-    // Below £35k + Yes investment + credit below 600 → Green £1,997
     return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
   } else {
-    // Below £35k + No investment → Blue £1,997
     return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
   }
 }
@@ -185,18 +179,17 @@ async function createGHLOpportunity(contact, tierData) {
 router.post('/webhook', async (req, res) => {
   try {
     const payload = req.body;
-    const responseId = payload.form_response?.token || payload.event_id || '';
-
-    if (responseId && isDuplicate(responseId)) {
-      return res.json({ success: true, skipped: 'duplicate' });
-    }
-
     const answers = payload.form_response?.answers || [];
     const fields_def = payload.form_response?.definition?.fields || [];
     const hidden = payload.form_response?.hidden || {};
 
     const tierData = determineLeadTier(answers, fields_def);
     const { color, prefix, price, firstName, lastName, email, phone } = tierData;
+
+    // Need at least email or phone to process
+    if (!email && !phone && !firstName) {
+      return res.json({ success: true, skipped: 'no contact info' });
+    }
 
     const newLeadFields = [];
     const bookedCallFields = [];
@@ -295,8 +288,19 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Always create GHL contact and opportunity
-    if (firstName || email || phone) {
+    if (hasCalendly) {
+      // Booking present - send to call booked only
+      const bookedTitle = `${prefix} New Call Booked - ${price}`;
+      const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
+    } else {
+      // No booking - new lead
+      // Check email deduplication to avoid duplicate new lead notifications
+      if (isDuplicateEmail(email)) {
+        return res.json({ success: true, skipped: 'duplicate email' });
+      }
+
+      // Create GHL contact and opportunity
       const contact = await createGHLContact({
         firstName,
         lastName,
@@ -309,18 +313,10 @@ router.post('/webhook', async (req, res) => {
       if (contact) {
         await createGHLOpportunity(contact, tierData);
       }
-    }
 
-    // Always send to new leads
-    const newLeadTitle = `${prefix} New Lead - ${price}`;
-    const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
-    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
-
-    // Also send to call booked if booking present
-    if (hasCalendly) {
-      const bookedTitle = `${prefix} New Call Booked - ${price}`;
-      const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
+      const newLeadTitle = `${prefix} New Lead - ${price}`;
+      const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
     }
 
     res.json({ success: true });
