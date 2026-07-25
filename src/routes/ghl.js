@@ -23,7 +23,7 @@ function isDuplicate(key) {
 
 function getContactGHLLink(contactId) {
   const locationId = process.env.GHL_LOCATION_ID;
-  return `https://app.gohighlevel.com/location/${locationId}/contacts/detail/${contactId}`;
+  return `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${contactId}`;
 }
 
 function determineLeadColor(body) {
@@ -32,8 +32,7 @@ function determineLeadColor(body) {
   if (
     tags.includes('high value') ||
     tags.includes('gold') ||
-    tags.includes('£2997') ||
-    tags.includes('2997') ||
+    tags.includes('premium') ||
     leadValue >= 2997
   ) {
     return { color: COLORS.GREEN, prefix: '🟢' };
@@ -60,7 +59,7 @@ function buildCallFields(body, stage) {
     { name: 'Date_created', value: body.date_created || '', inline: true },
     { name: 'Contact_source', value: body.contact_source || 'Calendly', inline: true },
     { name: 'Opportunity_name', value: body.opportunity_name || fullName, inline: true },
-    { name: 'Lead_value', value: body.opportunity_value || '', inline: true },
+    { name: 'Opportunity_value', value: body.opportunity_value || '', inline: true },
     { name: 'Source', value: body.calendar_name || '', inline: true },
     { name: 'Pipleline_stage', value: stage, inline: true },
     { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
@@ -169,7 +168,7 @@ router.post('/closed-deal', async (req, res) => {
       { name: 'Country', value: req.body.country || '', inline: true },
       { name: 'Timezone', value: req.body.timezone || '', inline: true },
       { name: 'Opportunity_name', value: req.body.opportunity_name || fullName, inline: true },
-      { name: 'Lead_value', value: req.body.opportunity_value || '', inline: true },
+      { name: 'Opportunity_value', value: req.body.opportunity_value || '', inline: true },
       { name: 'Pipeline_name', value: req.body.pipeline_name || '', inline: true },
       { name: 'Owner', value: req.body.assigned_user || '', inline: true },
       { name: 'Notes', value: req.body.opportunity_notes || '', inline: false },
