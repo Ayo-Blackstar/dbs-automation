@@ -73,6 +73,7 @@ function determineLeadTier(answers, fields_def) {
     if (fieldTitle.includes('email')) email = value;
     if (fieldTitle.includes('phone')) phone = value;
 
+    // High income - above £35k
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       workCircumstances = value;
       if (
@@ -89,12 +90,14 @@ function determineLeadTier(answers, fields_def) {
       }
     }
 
+    // Investment - must say YES
     if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
       if (valueLower.includes('yes') || valueLower.includes('can invest')) {
         hasInvestment = true;
       }
     }
 
+    // Credit score - only 600+
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
         valueLower.includes('800+') ||
@@ -108,11 +111,18 @@ function determineLeadTier(answers, fields_def) {
     }
   });
 
+  // Tier logic per Ayo's specification
   if (hasHighIncome) {
+    // Above £35k → Gold £2,997
     return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
   } else if (hasInvestment && hasGoodCreditScore) {
-    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
+    // Below £35k + Yes investment + credit 600+ → Gold £1,997
+    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£1,997', opportunityValue: 1997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
+  } else if (hasInvestment && !hasGoodCreditScore) {
+    // Below £35k + Yes investment + credit below 600 → Green £1,997
+    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
   } else {
+    // Below £35k + No investment → Blue £1,997
     return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
   }
 }
@@ -138,14 +148,12 @@ async function createGHLContact(contactData) {
   }
 }
 
-async function createGHLOpportunity(contact, tier) {
+async function createGHLOpportunity(contact, tierData) {
   try {
     const pipelineId = process.env.GHL_PIPELINE_ID;
     const stageId = process.env.GHL_PIPELINE_STAGE_ID;
     if (!pipelineId || !stageId || !contact?.id) return;
 
-    const opportunityValue = tier.opportunityValue;
-    const source = tier.source;
     const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email;
 
     await axios.post(
@@ -157,8 +165,8 @@ async function createGHLOpportunity(contact, tier) {
         name,
         locationId: process.env.GHL_LOCATION_ID,
         status: 'open',
-        monetaryValue: opportunityValue,
-        source,
+        monetaryValue: tierData.opportunityValue,
+        source: tierData.source,
       },
       {
         headers: {
@@ -188,7 +196,7 @@ router.post('/webhook', async (req, res) => {
     const hidden = payload.form_response?.hidden || {};
 
     const tierData = determineLeadTier(answers, fields_def);
-    const { tier, color, prefix, price, firstName, lastName, email, phone } = tierData;
+    const { color, prefix, price, firstName, lastName, email, phone } = tierData;
 
     const newLeadFields = [];
     const bookedCallFields = [];
@@ -287,7 +295,7 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Always create GHL contact and opportunity for ALL submissions
+    // Always create GHL contact and opportunity
     if (firstName || email || phone) {
       const contact = await createGHLContact({
         firstName,
