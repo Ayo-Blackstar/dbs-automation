@@ -72,7 +72,6 @@ function determineLeadTier(answers, fields_def) {
     if (fieldTitle.includes('email')) email = value;
     if (fieldTitle.includes('phone')) phone = value;
 
-    // High income - above £35k
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       if (
         valueLower.includes('above £35k') ||
@@ -88,14 +87,12 @@ function determineLeadTier(answers, fields_def) {
       }
     }
 
-    // Investment check - must say YES
     if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
       if (valueLower.includes('yes') || valueLower.includes('can invest')) {
         hasInvestment = true;
       }
     }
 
-    // Credit score - only 600+
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
         valueLower.includes('800+') ||
@@ -109,7 +106,6 @@ function determineLeadTier(answers, fields_def) {
     }
   });
 
-  // Determine tier
   if (hasHighIncome) {
     return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', firstName, lastName, email, phone };
   } else if (hasInvestment && hasGoodCreditScore) {
@@ -282,7 +278,7 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Create GHL contact and opportunity
+    // Always create GHL contact and opportunity for ALL submissions
     if (firstName || email || phone) {
       const contact = await createGHLContact({
         firstName,
@@ -290,7 +286,7 @@ router.post('/webhook', async (req, res) => {
         email,
         phone,
         locationId: process.env.GHL_LOCATION_ID,
-        source: 'Typeform',
+        source: 'typeform',
         tags: ['typeform-lead'],
       });
       if (contact) {
