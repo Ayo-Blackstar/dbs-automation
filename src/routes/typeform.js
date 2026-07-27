@@ -67,11 +67,11 @@ function determineLeadTier(answers, fields_def) {
     else if (answer.type === 'text') value = answer.text || '';
     else if (answer.type === 'email') {
       value = answer.email || '';
-      email = value; // Always capture email type directly
+      email = value;
     }
     else if (answer.type === 'phone_number') {
       value = answer.phone_number || '';
-      phone = value; // Always capture phone_number type directly
+      phone = value;
     }
 
     const valueLower = value.toLowerCase();
@@ -79,7 +79,6 @@ function determineLeadTier(answers, fields_def) {
     if (fieldTitle.includes('first name')) firstName = value;
     if (fieldTitle.includes('last name')) lastName = value;
 
-    // Work circumstances check
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       workCircumstances = value;
       if (valueLower.includes('earning above £35k') || valueLower.includes('above £35k')) {
@@ -90,14 +89,12 @@ function determineLeadTier(answers, fields_def) {
       }
     }
 
-    // Investment check
     if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
       if (valueLower.includes('yes') || valueLower.includes('can invest')) {
         hasInvestment = true;
       }
     }
 
-    // Credit score check - only 600+
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
         valueLower.includes('800+') ||
@@ -124,6 +121,25 @@ function determineLeadTier(answers, fields_def) {
   }
 }
 
+async function findGHLContactByEmail(email) {
+  try {
+    const response = await axios.get(
+      `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+          'Version': '2021-07-28'
+        }
+      }
+    );
+    const contacts = response.data?.contacts || [];
+    return contacts[0] || null;
+  } catch (err) {
+    console.error('GHL find contact error:', err.response?.status, JSON.stringify(err.response?.data));
+    return null;
+  }
+}
+
 async function createGHLContact(contactData) {
   try {
     const response = await axios.post(
@@ -145,15 +161,14 @@ async function createGHLContact(contactData) {
   }
 }
 
-async function createGHLOpportunity(contact, tierData) {
+async function createGHLOpportunity(contact, stageId, tierData) {
   try {
     const pipelineId = process.env.GHL_PIPELINE_ID;
-    const stageId = process.env.GHL_PIPELINE_STAGE_ID;
-    if (!pipelineId || !stageId || !contact?.id) return;
+    if (!pipelineId || !stageId || !contact?.id) return null;
 
     const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email;
 
-    await axios.post(
+    const response = await axios.post(
       'https://services.leadconnectorhq.com/opportunities/',
       {
         pipelineId,
@@ -173,9 +188,49 @@ async function createGHLOpportunity(contact, tierData) {
         }
       }
     );
-    console.log('GHL opportunity created successfully');
+    console.log('GHL opportunity created:', response.data?.opportunity?.id);
+    return response.data?.opportunity;
   } catch (err) {
     console.error('GHL opportunity error:', err.response?.status, JSON.stringify(err.response?.data));
+    return null;
+  }
+}
+
+async function findAndUpdateOpportunityStage(contactId, stageId) {
+  try {
+    const pipelineId = process.env.GHL_PIPELINE_ID;
+    if (!pipelineId || !stageId || !contactId) return;
+
+    // Find existing opportunity for this contact
+    const response = await axios.get(
+      `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+          'Version': '2021-07-28'
+        }
+      }
+    );
+
+    const opportunities = response.data?.opportunities || [];
+    const opportunity = opportunities.find(o => o.pipelineId === pipelineId);
+
+    if (opportunity) {
+      await axios.put(
+        `https://services.leadconnectorhq.com/opportunities/${opportunity.id}`,
+        { pipelineStageId: stageId },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+            'Content-Type': 'application/json',
+            'Version': '2021-07-28'
+          }
+        }
+      );
+      console.log('GHL opportunity stage updated to booked');
+    }
+  } catch (err) {
+    console.error('GHL opportunity update error:', err.response?.status, JSON.stringify(err.response?.data));
   }
 }
 
@@ -288,29 +343,55 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    if (!isDuplicateEmail(email)) {
-      const contact = await createGHLContact({
-        firstName,
-        lastName,
-        email,
-        phone,
-        locationId: process.env.GHL_LOCATION_ID,
-        source: 'typeform',
-        tags: ['typeform-lead'],
-      });
-      if (contact) {
-        await createGHLOpportunity(contact, tierData);
+    if (hasCalendly) {
+      // Find existing contact or create new one
+      let contact = null;
+      if (email) {
+        contact = await findGHLContactByEmail(email);
+      }
+      if (!contact) {
+        contact = await createGHLContact({
+          firstName,
+          lastName,
+          email,
+          phone,
+          locationId: process.env.GHL_LOCATION_ID,
+          source: 'typeform',
+          tags: ['typeform-lead', 'appointment-booked'],
+        });
+        if (contact) {
+          // New contact - create opportunity in Appointment Booked stage
+          await createGHLOpportunity(contact, process.env.GHL_PIPELINE_BOOKED_STAGE_ID, tierData);
+        }
+      } else {
+        // Existing contact - update opportunity stage to Appointment Booked
+        await findAndUpdateOpportunityStage(contact.id, process.env.GHL_PIPELINE_BOOKED_STAGE_ID);
       }
 
-      const newLeadTitle = `${prefix} New Lead - ${price}`;
-      const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
-    }
-
-    if (hasCalendly) {
       const bookedTitle = `${prefix} New Call Booked - ${price}`;
       const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
+
+    } else {
+      // New lead - create contact and opportunity in Submitted Application
+      if (!isDuplicateEmail(email)) {
+        const contact = await createGHLContact({
+          firstName,
+          lastName,
+          email,
+          phone,
+          locationId: process.env.GHL_LOCATION_ID,
+          source: 'typeform',
+          tags: ['typeform-lead'],
+        });
+        if (contact) {
+          await createGHLOpportunity(contact, process.env.GHL_PIPELINE_STAGE_ID, tierData);
+        }
+
+        const newLeadTitle = `${prefix} New Lead - ${price}`;
+        const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
+        await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
+      }
     }
 
     res.json({ success: true });
