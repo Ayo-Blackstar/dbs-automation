@@ -1,386 +1,178 @@
 const express = require('express');
 const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
-const axios = require('axios');
 
-const processedEmails = new Map();
-const DEDUP_WINDOW_MS = 5 * 60 * 1000;
+const recentNotifications = new Map();
+const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-function isDuplicateEmail(email) {
-  if (!email) return false;
+function isDuplicate(key) {
   const now = Date.now();
-  if (processedEmails.has(email)) {
-    const timestamp = processedEmails.get(email);
+  if (recentNotifications.has(key)) {
+    const timestamp = recentNotifications.get(key);
     if (now - timestamp < DEDUP_WINDOW_MS) {
-      console.log(`Duplicate email blocked: ${email}`);
+      console.log(`Duplicate blocked: ${key}`);
       return true;
     }
   }
-  processedEmails.set(email, now);
-  for (const [k, t] of processedEmails.entries()) {
-    if (now - t > DEDUP_WINDOW_MS) processedEmails.delete(k);
+  recentNotifications.set(key, now);
+  for (const [k, t] of recentNotifications.entries()) {
+    if (now - t > DEDUP_WINDOW_MS) recentNotifications.delete(k);
   }
   return false;
 }
 
-function abbreviateTitle(title) {
-  const map = {
-    'how long have you been living in the uk': 'UK Residency',
-    'why are you considering changing your career': 'Reason for Change',
-    'what best describes your work circumstances': 'Work Circumstances',
-    'the investment for our program is': 'Investment',
-    'to be approved for a 12-month payment plan': 'Credit Score',
-    'if you are accepted into our training program': 'Start Timeline',
-    'first name': 'First Name',
-    'last name': 'Last Name',
-    'phone': 'Phone',
-    'email': 'Email',
-  };
-  const lower = title.toLowerCase();
-  for (const [key, val] of Object.entries(map)) {
-    if (lower.includes(key)) return val;
+function getContactGHLLink(contactId) {
+  const locationId = process.env.GHL_LOCATION_ID;
+  return `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${contactId}`;
+}
+
+function determineLeadColor(body) {
+  const tags = (body.tags || '').toLowerCase();
+  const leadValue = parseFloat(body.opportunity_value || body.lead_value || '0');
+  if (tags.includes('high value') || tags.includes('gold') || tags.includes('premium') || leadValue >= 2997) {
+    return { color: COLORS.GREEN, prefix: '🟢' };
   }
-  return title;
+  return { color: COLORS.BLUE, prefix: '📞' };
 }
 
-function isCalendlyBookingUrl(value) {
-  return value && value.includes('calendly.com') && value.includes('invitees');
+function buildCallFields(body, stage) {
+  const contactId = body.contact_id || body.contactId || '';
+  const fullName = body.full_name ||
+    `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
+    body.contact_name || 'Unknown';
+  const ghlLink = getContactGHLLink(contactId);
+
+  return [
+    { name: 'Stage', value: stage, inline: true },
+    { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
+    { name: 'Email', value: body.email || '', inline: true },
+    { name: 'Phone', value: body.phone || '', inline: true },
+    { name: 'Full_name', value: fullName, inline: true },
+    { name: 'Tags', value: body.tags || '', inline: true },
+    { name: 'Country', value: body.country || '', inline: true },
+    { name: 'Timezone', value: body.timezone || '', inline: true },
+    { name: 'Date_created', value: body.date_created || '', inline: true },
+    { name: 'Contact_source', value: body.contact_source || '', inline: true },
+    { name: 'Opportunity_name', value: body.opportunity_name || fullName, inline: true },
+    { name: 'Opportunity_value', value: body.opportunity_value || '', inline: true },
+    { name: 'Source', value: body.calendar_name || '', inline: true },
+    { name: 'Pipleline_stage', value: stage, inline: true },
+    { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
+    { name: 'Owner', value: body.assigned_user || '', inline: true },
+  ];
 }
 
-function determineLeadTier(answers, fields_def) {
-  let hasHighIncome = false;
-  let hasInvestment = false;
-  let hasGoodCreditScore = false;
-  let isIneligible = false;
-  let firstName = '';
-  let lastName = '';
-  let email = '';
-  let phone = '';
-  let workCircumstances = '';
-
-  answers.forEach((answer, index) => {
-    const fieldDef = fields_def[index];
-    const fieldTitle = (fieldDef?.title || '').toLowerCase();
-    let value = '';
-
-    if (answer.type === 'choice') value = answer.choice?.label || '';
-    else if (answer.type === 'text') value = answer.text || '';
-    else if (answer.type === 'email') {
-      value = answer.email || '';
-      email = value;
-    }
-    else if (answer.type === 'phone_number') {
-      value = answer.phone_number || '';
-      phone = value;
-    }
-
-    const valueLower = value.toLowerCase();
-
-    if (fieldTitle.includes('first name')) firstName = value;
-    if (fieldTitle.includes('last name')) lastName = value;
-
-    if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
-      workCircumstances = value;
-      if (valueLower.includes('earning above £35k') || valueLower.includes('above £35k')) {
-        hasHighIncome = true;
-      }
-      if (valueLower.includes('unemployed') || valueLower.includes('tier 2') || valueLower.includes('sponsorship')) {
-        isIneligible = true;
-      }
-    }
-
-    if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
-      if (valueLower.includes('yes') || valueLower.includes('can invest')) {
-        hasInvestment = true;
-      }
-    }
-
-    if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
-      if (
-        valueLower.includes('800+') ||
-        valueLower.includes('800') ||
-        valueLower.includes('701 - 800') ||
-        valueLower.includes('701') ||
-        valueLower.includes('600 - 700')
-      ) {
-        hasGoodCreditScore = true;
-      }
-    }
-  });
-
-  if (isIneligible) {
-    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
-  } else if (hasHighIncome) {
-    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
-  } else if (hasInvestment && hasGoodCreditScore) {
-    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£1,997', opportunityValue: 1997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
-  } else if (hasInvestment && !hasGoodCreditScore) {
-    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
-  } else {
-    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
-  }
-}
-
-async function createGHLContact(contactData) {
+router.post('/booked-call', async (req, res) => {
   try {
-    const response = await axios.post(
-      'https://services.leadconnectorhq.com/contacts/',
-      contactData,
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Version': '2021-07-28'
-        }
-      }
-    );
-    console.log('GHL contact created:', response.data?.contact?.id);
-    return response.data?.contact;
-  } catch (err) {
-    // If duplicate contact, return the existing contact ID
-    if (err.response?.status === 400 && err.response?.data?.meta?.contactId) {
-      console.log('GHL contact already exists:', err.response.data.meta.contactId);
-      return { id: err.response.data.meta.contactId };
-    }
-    console.error('GHL contact error:', err.response?.status, JSON.stringify(err.response?.data));
-    return null;
-  }
-}
-
-async function createGHLOpportunity(contact, stageId, tierData) {
-  try {
-    const pipelineId = process.env.GHL_PIPELINE_ID;
-    if (!pipelineId || !stageId || !contact?.id) return null;
-
-    const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'New Lead';
-
-    const response = await axios.post(
-      'https://services.leadconnectorhq.com/opportunities/',
-      {
-        pipelineId,
-        pipelineStageId: stageId,
-        contactId: contact.id,
-        name,
-        locationId: process.env.GHL_LOCATION_ID,
-        status: 'open',
-        monetaryValue: tierData.opportunityValue,
-        source: tierData.source,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Version': '2021-07-28'
-        }
-      }
-    );
-    console.log('GHL opportunity created:', response.data?.opportunity?.id);
-    return response.data?.opportunity;
-  } catch (err) {
-    console.error('GHL opportunity error:', err.response?.status, JSON.stringify(err.response?.data));
-    return null;
-  }
-}
-
-async function findAndUpdateOpportunityStage(contactId, stageId) {
-  try {
-    const pipelineId = process.env.GHL_PIPELINE_ID;
-    if (!pipelineId || !stageId || !contactId) return;
-
-    const response = await axios.get(
-      `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
-          'Version': '2021-07-28'
-        }
-      }
-    );
-
-    const opportunities = response.data?.opportunities || [];
-    const opportunity = opportunities.find(o => o.pipelineId === pipelineId);
-
-    if (opportunity) {
-      await axios.put(
-        `https://services.leadconnectorhq.com/opportunities/${opportunity.id}`,
-        { pipelineStageId: stageId },
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
-            'Content-Type': 'application/json',
-            'Version': '2021-07-28'
-          }
-        }
-      );
-      console.log('GHL opportunity stage updated to booked');
-    } else {
-      console.log('No existing opportunity found, creating new one');
-    }
-    return opportunity;
-  } catch (err) {
-    console.error('GHL opportunity update error:', err.response?.status, JSON.stringify(err.response?.data));
-    return null;
-  }
-}
-
-router.post('/webhook', async (req, res) => {
-  try {
-    const payload = req.body;
-    const answers = payload.form_response?.answers || [];
-    const fields_def = payload.form_response?.definition?.fields || [];
-    const hidden = payload.form_response?.hidden || {};
-
-    const tierData = determineLeadTier(answers, fields_def);
-    const { color, prefix, price, firstName, lastName, email, phone } = tierData;
-
-    if (!email && !phone && !firstName) {
-      return res.json({ success: true, skipped: 'no contact info' });
-    }
-
-    const newLeadFields = [];
-    const bookedCallFields = [];
-    let hasCalendly = false;
-    let calendlyValue = '';
-
-    const now = new Date().toLocaleDateString('en-GB');
-    newLeadFields.push({ name: 'Time', value: now, inline: true });
-    bookedCallFields.push({ name: 'Time', value: now, inline: true });
-
-    answers.forEach((answer, index) => {
-      const fieldDef = fields_def[index];
-      const rawTitle = fieldDef?.title || `Question ${index + 1}`;
-      const fieldTitle = abbreviateTitle(rawTitle);
-      let value = '';
-
-      switch (answer.type) {
-        case 'text':
-          value = answer.text || '';
-          break;
-        case 'email':
-          value = answer.email || '';
-          break;
-        case 'phone_number':
-          value = answer.phone_number || '';
-          break;
-        case 'choice':
-          value = answer.choice?.label || '';
-          break;
-        case 'choices':
-          value = answer.choices?.labels?.join(', ') || '';
-          break;
-        case 'boolean':
-          value = answer.boolean ? 'Yes' : 'No';
-          break;
-        case 'number':
-          value = String(answer.number) || '';
-          break;
-        case 'calendly':
-          if (!hasCalendly) {
-            hasCalendly = true;
-            calendlyValue = answer.url || 'Call Booked ✅';
-          }
-          return;
-        case 'url':
-          value = answer.url || '';
-          if (isCalendlyBookingUrl(value)) {
-            if (!hasCalendly) {
-              hasCalendly = true;
-              calendlyValue = value;
-            }
-            return;
-          }
-          break;
-        default:
-          value = answer.url || answer.text || answer.email || '';
-          if (isCalendlyBookingUrl(value)) {
-            if (!hasCalendly) {
-              hasCalendly = true;
-              calendlyValue = value;
-            }
-            return;
-          }
-      }
-
-      if (value) {
-        const field = {
-          name: fieldTitle.substring(0, 256),
-          value: String(value).substring(0, 1024),
-          inline: true
-        };
-        newLeadFields.push(field);
-        bookedCallFields.push(field);
-      }
-    });
-
-    if (hasCalendly && calendlyValue) {
-      bookedCallFields.push({
-        name: 'Call Booking',
-        value: String(calendlyValue).substring(0, 1024),
-        inline: true
-      });
-    }
-
-    if (hidden && Object.keys(hidden).length > 0) {
-      const utmLines = Object.entries(hidden)
-        .filter(([k, v]) => v)
-        .map(([k, v]) => `**${k}:** ${v}`)
-        .join('\n');
-      if (utmLines) {
-        const utmField = { name: 'ATTRIBUTION', value: utmLines, inline: false };
-        newLeadFields.push(utmField);
-        bookedCallFields.push(utmField);
-      }
-    }
-
-    // Always create/find GHL contact
-    const contact = await createGHLContact({
-      firstName,
-      lastName,
-      email,
-      phone,
-      locationId: process.env.GHL_LOCATION_ID,
-      source: 'typeform',
-      tags: ['typeform-lead'],
-    });
-
-    if (hasCalendly) {
-      // Move/create opportunity to Appointment Booked stage
-      if (contact?.id) {
-        const existing = await findAndUpdateOpportunityStage(
-          contact.id,
-          process.env.GHL_PIPELINE_BOOKED_STAGE_ID
-        );
-        if (!existing) {
-          await createGHLOpportunity(
-            contact,
-            process.env.GHL_PIPELINE_BOOKED_STAGE_ID,
-            tierData
-          );
-        }
-      }
-
-      const bookedTitle = `${prefix} New Call Booked - ${price}`;
-      const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
-
-    } else {
-      // New lead - create opportunity in Submitted Application
-      if (!isDuplicateEmail(email) && contact?.id) {
-        await createGHLOpportunity(
-          contact,
-          process.env.GHL_PIPELINE_STAGE_ID,
-          tierData
-        );
-
-        const newLeadTitle = `${prefix} New Lead - ${price}`;
-        const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
-        await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
-      }
-    }
-
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `booked-${contactId}-${req.body.email || ''}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    await new Promise(resolve => setTimeout(resolve, 60000));
+    const { color, prefix } = determineLeadColor(req.body);
+    const embed = createEmbed(`${prefix} Pipeline: Call Booked`, buildCallFields(req.body, 'Call Booked'), color);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
     res.json({ success: true });
   } catch (err) {
-    console.error('Typeform error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/confirmed-call', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `confirmed-${contactId}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    const { color } = determineLeadColor(req.body);
+    const embed = createEmbed('✅ Pipeline: Confirmed Call', buildCallFields(req.body, 'Confirmed'), color);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_CONFIRMED_CALLS, embed);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/no-show', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `noshow-${contactId}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    const embed = createEmbed('❌ Pipeline: No Show', buildCallFields(req.body, 'No Show'), COLORS.RED);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NO_SHOW, embed);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/follow-up', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `followup-${contactId}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    const embed = createEmbed('🔄 Pipeline: Follow Up', buildCallFields(req.body, 'Follow Up'), COLORS.YELLOW);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FOLLOW_UP, embed);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/cancelled', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `cancelled-${contactId}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    const embed = createEmbed('🚫 Pipeline: Booking Cancelled', buildCallFields(req.body, 'Booking Cancelled'), COLORS.ORANGE);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_CANCELLED, embed);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/rescheduled', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `rescheduled-${contactId}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    const embed = createEmbed('🔁 Pipeline: Rescheduled', buildCallFields(req.body, 'Rescheduled'), COLORS.BLUE);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_RESCHEDULED, embed);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/closed-deal', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `closed-${contactId}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    const fullName = req.body.full_name ||
+      `${req.body.first_name || ''} ${req.body.last_name || ''}`.trim() ||
+      req.body.contact_name || 'Unknown';
+    const ghlLink = getContactGHLLink(contactId);
+
+    const fields = [
+      { name: 'Stage', value: 'Closed Won', inline: true },
+      { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
+      { name: 'Email', value: req.body.email || '', inline: true },
+      { name: 'Phone', value: req.body.phone || '', inline: true },
+      { name: 'Full_name', value: fullName, inline: true },
+      { name: 'Tags', value: req.body.tags || '', inline: true },
+      { name: 'Country', value: req.body.country || '', inline: true },
+      { name: 'Timezone', value: req.body.timezone || '', inline: true },
+      { name: 'Opportunity_name', value: req.body.opportunity_name || fullName, inline: true },
+      { name: 'Opportunity_value', value: req.body.opportunity_value || '', inline: true },
+      { name: 'Pipeline_name', value: req.body.pipeline_name || '', inline: true },
+      { name: 'Owner', value: req.body.assigned_user || '', inline: true },
+      { name: 'Notes', value: req.body.opportunity_notes || '', inline: false },
+    ];
+
+    const embed = createEmbed('🏆 Pipeline: Closed Won', fields, COLORS.GOLD);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_CLOSED_DEAL, embed);
+    res.json({ success: true });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
