@@ -10,17 +10,15 @@ function buildPaymentFields(data) {
     { name: '📧 Email', value: data.email || 'N/A', inline: true },
     { name: '📞 Phone', value: data.phone || 'N/A', inline: true },
     { name: '🛍️ Product', value: data.product || 'N/A', inline: true },
+    { name: '📊 Event', value: data.eventType || 'N/A', inline: true },
   ];
 }
 
 function extractProductName(obj) {
-  // Try metadata first
   if (obj.metadata?.product_name) return obj.metadata.product_name;
   if (obj.metadata?.description) return obj.metadata.description;
-  // Try description but clean it up
   if (obj.description) {
     const desc = obj.description;
-    // Remove invoice/payment schedule IDs
     if (desc.toLowerCase().includes('invoiceid') || desc.toLowerCase().includes('paymentscheduleid')) {
       return 'DBS Payment';
     }
@@ -41,9 +39,16 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
   }
 
   try {
+    console.log('Stripe event type:', event.type);
     const obj = event.data.object;
-    const amount = obj.amount ? `£${(obj.amount / 100).toFixed(2)}` : 
-                   obj.amount_received ? `£${(obj.amount_received / 100).toFixed(2)}` : 'N/A';
+
+    const amount = obj.amount_received
+      ? `£${(obj.amount_received / 100).toFixed(2)}`
+      : obj.amount
+      ? `£${(obj.amount / 100).toFixed(2)}`
+      : obj.amount_due
+      ? `£${(obj.amount_due / 100).toFixed(2)}`
+      : 'N/A';
 
     const data = {
       name: obj.billing_details?.name || obj.customer_details?.name || obj.shipping?.name || 'N/A',
@@ -51,19 +56,32 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
       email: obj.billing_details?.email || obj.customer_details?.email || obj.receipt_email || 'N/A',
       phone: obj.billing_details?.phone || obj.customer_details?.phone || 'N/A',
       product: extractProductName(obj),
+      eventType: event.type,
     };
 
     const fields = buildPaymentFields(data);
 
-    if (event.type === 'payment_intent.succeeded') {
+    if (
+      event.type === 'payment_intent.succeeded' ||
+      event.type === 'charge.succeeded'
+    ) {
       const embed = createEmbed('💳 New Stripe Payment - DBS', fields, COLORS.GOLD);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_PAYMENTS, embed);
-    } else if (event.type === 'payment_intent.payment_failed') {
+
+    } else if (
+      event.type === 'payment_intent.payment_failed' ||
+      event.type === 'charge.failed' ||
+      event.type === 'invoice.payment_failed'
+    ) {
       const embed = createEmbed('❌ Failed Stripe Payment - DBS', fields, COLORS.RED);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
+
     } else if (event.type === 'charge.dispute.created') {
       const embed = createEmbed('⚠️ Stripe Dispute - DBS', fields, COLORS.ORANGE);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
+
+    } else {
+      console.log('Unhandled Stripe event:', event.type);
     }
 
     res.json({ received: true });
