@@ -56,6 +56,7 @@ function determineLeadTier(answers, fields_def) {
   let email = '';
   let phone = '';
   let workCircumstances = '';
+  let reasonForChange = '';
 
   answers.forEach((answer, index) => {
     const fieldDef = fields_def[index];
@@ -85,6 +86,10 @@ function determineLeadTier(answers, fields_def) {
       }
     }
 
+    if (fieldTitle.includes('why are you considering') || fieldTitle.includes('reason for change') || fieldTitle.includes('changing your career')) {
+      reasonForChange = value;
+    }
+
     if (fieldTitle.includes('investment') || fieldTitle.includes('invest')) {
       if (valueLower.includes('yes') || valueLower.includes('can invest')) {
         hasInvestment = true;
@@ -105,13 +110,13 @@ function determineLeadTier(answers, fields_def) {
   });
 
   if (hasHighIncome) {
-    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
+    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   } else if (hasInvestment && hasGoodCreditScore) {
-    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£1,997', opportunityValue: 1997, source: 'Finance', firstName, lastName, email, phone, workCircumstances };
+    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£1,997', opportunityValue: 1997, source: 'Finance', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   } else if (hasInvestment && !hasGoodCreditScore) {
-    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
+    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   } else {
-    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances };
+    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   }
 }
 
@@ -223,7 +228,7 @@ router.post('/webhook', async (req, res) => {
     const hidden = payload.form_response?.hidden || {};
 
     const tierData = determineLeadTier(answers, fields_def);
-    const { color, prefix, price, firstName, lastName, email, phone } = tierData;
+    const { color, prefix, price, firstName, lastName, email, phone, workCircumstances, reasonForChange } = tierData;
 
     if (!email && !phone && !firstName) {
       return res.json({ success: true, skipped: 'no contact info' });
@@ -324,6 +329,15 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
+    // Build custom fields for GHL contact
+    const customFields = [];
+    if (workCircumstances) {
+      customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
+    }
+    if (reasonForChange) {
+      customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
+    }
+
     // Always create GHL contact for ALL leads
     const contact = await createGHLContact({
       firstName,
@@ -333,6 +347,7 @@ router.post('/webhook', async (req, res) => {
       locationId: process.env.GHL_LOCATION_ID,
       source: 'typeform',
       tags: ['typeform-lead'],
+      customFields,
     });
 
     if (hasCalendly) {
