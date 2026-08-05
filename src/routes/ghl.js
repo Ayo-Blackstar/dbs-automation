@@ -28,11 +28,14 @@ function getContactGHLLink(contactId) {
 
 function determineLeadColor(body) {
   const tags = (body.tags || '').toLowerCase();
-  const leadValue = parseFloat(body.opportunity_value || body.lead_value || '0');
-  if (tags.includes('high value') || tags.includes('gold') || tags.includes('premium') || leadValue >= 2997) {
-    return { color: COLORS.GREEN, prefix: '🟢' };
+  const leadValue = parseFloat(body.opportunity_value || body.monetary_value || body.lead_value || '0');
+
+  if (tags.includes('gold-lead') || leadValue >= 2997) {
+    return { color: COLORS.GOLD, prefix: '🥇', price: '£2,997' };
+  } else if (tags.includes('green-lead') || (tags.includes('finance') && leadValue >= 1997)) {
+    return { color: COLORS.GREEN, prefix: '🟢', price: '£1,997' };
   }
-  return { color: COLORS.BLUE, prefix: '📞' };
+  return { color: COLORS.BLUE, prefix: '📞', price: '£1,997' };
 }
 
 function buildCallFields(body, stage) {
@@ -55,12 +58,46 @@ function buildCallFields(body, stage) {
     { name: 'Contact_source', value: body.contact_source || '', inline: true },
     { name: 'Opportunity_name', value: body.opportunity_name || fullName, inline: true },
     { name: 'Opportunity_value', value: body.opportunity_value || '', inline: true },
-    { name: 'Source', value: body.calendar_name || '', inline: true },
-    { name: 'Pipleline_stage', value: stage, inline: true },
     { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
     { name: 'Owner', value: body.assigned_user || '', inline: true },
   ];
 }
+
+function buildLeadFields(body) {
+  const contactId = body.contact_id || body.contactId || '';
+  const fullName = body.full_name ||
+    `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
+    body.contact_name || 'Unknown';
+  const ghlLink = getContactGHLLink(contactId);
+
+  return [
+    { name: 'Time', value: new Date().toLocaleDateString('en-GB'), inline: true },
+    { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
+    { name: 'Email', value: body.email || '', inline: true },
+    { name: 'Phone', value: body.phone || '', inline: true },
+    { name: 'Tags', value: body.tags || '', inline: true },
+    { name: 'Country', value: body.country || '', inline: true },
+    { name: 'Source', value: body.contact_source || body.source || '', inline: true },
+    { name: 'Date_created', value: body.date_created || '', inline: true },
+  ];
+}
+
+router.post('/new-lead', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const email = req.body.email || '';
+    const dedupKey = `newlead-${contactId}-${email}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+
+    const { color, prefix, price } = determineLeadColor(req.body);
+    const fields = buildLeadFields(req.body);
+    const embed = createEmbed(`${prefix} New Lead - ${price}`, fields, color);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.post('/booked-call', async (req, res) => {
   try {
@@ -68,8 +105,8 @@ router.post('/booked-call', async (req, res) => {
     const dedupKey = `booked-${contactId}-${req.body.email || ''}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
     await new Promise(resolve => setTimeout(resolve, 60000));
-    const { color, prefix } = determineLeadColor(req.body);
-    const embed = createEmbed(`${prefix} Pipeline: Call Booked`, buildCallFields(req.body, 'Call Booked'), color);
+    const { color, prefix, price } = determineLeadColor(req.body);
+    const embed = createEmbed(`${prefix} New Call Booked - ${price}`, buildCallFields(req.body, 'Call Booked'), color);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
     res.json({ success: true });
   } catch (err) {
