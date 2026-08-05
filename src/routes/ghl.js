@@ -137,7 +137,6 @@ router.post('/booked-call', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `booked-${contactId}-${req.body.email || ''}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-    await new Promise(resolve => setTimeout(resolve, 60000));
     const { color, prefix, price } = determineLeadColor(req.body);
     const embed = createEmbed(`${prefix} New Call Booked - ${price}`, buildCallFields(req.body, 'Call Booked'), color);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
