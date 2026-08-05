@@ -32,10 +32,53 @@ function determineLeadColor(body) {
 
   if (tags.includes('gold-lead') || leadValue >= 2997) {
     return { color: COLORS.GOLD, prefix: '🥇', price: '£2,997' };
-  } else if (tags.includes('green-lead') || (tags.includes('finance') && leadValue >= 1997)) {
+  } else if (tags.includes('green-lead')) {
     return { color: COLORS.GREEN, prefix: '🟢', price: '£1,997' };
   }
   return { color: COLORS.BLUE, prefix: '📞', price: '£1,997' };
+}
+
+function buildLeadFields(body) {
+  const contactId = body.contact_id || body.contactId || '';
+  const fullName = body.full_name ||
+    `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
+    body.contact_name || 'Unknown';
+  const ghlLink = getContactGHLLink(contactId);
+
+  const fields = [
+    { name: 'Time', value: new Date().toLocaleDateString('en-GB'), inline: true },
+    { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
+    { name: 'Email', value: body.email || '', inline: true },
+    { name: 'Phone', value: body.phone || '', inline: true },
+    { name: 'Tags', value: body.tags || '', inline: true },
+    { name: 'Country', value: body.country || '', inline: true },
+    { name: 'Source', value: body.contact_source || body.source || '', inline: true },
+    { name: 'Date_created', value: body.date_created || '', inline: true },
+  ];
+
+  if (body.work_circumstances) {
+    fields.push({ name: 'Work Circumstances', value: body.work_circumstances, inline: true });
+  }
+  if (body.reason_for_change) {
+    fields.push({ name: 'Reason for Change', value: body.reason_for_change, inline: true });
+  }
+  if (body.uk_residency) {
+    fields.push({ name: 'UK Residency', value: body.uk_residency, inline: true });
+  }
+  if (body.investment) {
+    fields.push({ name: 'Investment', value: body.investment, inline: true });
+  }
+  if (body.credit_score) {
+    fields.push({ name: 'Credit Score', value: body.credit_score, inline: true });
+  }
+  if (body.start_timeline) {
+    fields.push({ name: 'Start Timeline', value: body.start_timeline, inline: true });
+  }
+  if (body.opportunity_value) {
+    fields.push({ name: 'Opportunity Value', value: `£${body.opportunity_value}`, inline: true });
+  }
+
+  return fields;
 }
 
 function buildCallFields(body, stage) {
@@ -45,7 +88,7 @@ function buildCallFields(body, stage) {
     body.contact_name || 'Unknown';
   const ghlLink = getContactGHLLink(contactId);
 
-  return [
+  const fields = [
     { name: 'Stage', value: stage, inline: true },
     { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
     { name: 'Email', value: body.email || '', inline: true },
@@ -61,25 +104,15 @@ function buildCallFields(body, stage) {
     { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
     { name: 'Owner', value: body.assigned_user || '', inline: true },
   ];
-}
 
-function buildLeadFields(body) {
-  const contactId = body.contact_id || body.contactId || '';
-  const fullName = body.full_name ||
-    `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
-    body.contact_name || 'Unknown';
-  const ghlLink = getContactGHLLink(contactId);
+  if (body.work_circumstances) {
+    fields.push({ name: 'Work Circumstances', value: body.work_circumstances, inline: true });
+  }
+  if (body.reason_for_change) {
+    fields.push({ name: 'Reason for Change', value: body.reason_for_change, inline: true });
+  }
 
-  return [
-    { name: 'Time', value: new Date().toLocaleDateString('en-GB'), inline: true },
-    { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
-    { name: 'Email', value: body.email || '', inline: true },
-    { name: 'Phone', value: body.phone || '', inline: true },
-    { name: 'Tags', value: body.tags || '', inline: true },
-    { name: 'Country', value: body.country || '', inline: true },
-    { name: 'Source', value: body.contact_source || body.source || '', inline: true },
-    { name: 'Date_created', value: body.date_created || '', inline: true },
-  ];
+  return fields;
 }
 
 router.post('/new-lead', async (req, res) => {
