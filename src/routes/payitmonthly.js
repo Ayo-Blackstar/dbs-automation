@@ -19,7 +19,6 @@ router.post('/webhook', async (req, res) => {
     console.log('Pay it Monthly payload:', JSON.stringify(req.body));
     const payload = req.body;
 
-    // Handle different payload structures
     const notification = payload.notification || payload.data?.notification || {};
     const application = payload.application || payload.data?.application || payload.data || {};
     const reference = payload.reference || payload.data?.reference || 'N/A';
@@ -48,18 +47,23 @@ router.post('/webhook', async (req, res) => {
     if (status === 'ACCEPTED' || status === 'APPROVED' || status === 'COMPLETED' || status === 'SIGNED') {
       const embed = createEmbed('✅ Pay it Monthly - Approved', fields, COLORS.GOLD);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_PAYMENTS, embed);
+
     } else if (
-      status === 'DECLINED' || status === 'EXPIRED' || 
+      status === 'DECLINED' || status === 'EXPIRED' ||
       status === 'CANCELLED' || status === 'FAILED' ||
       status === 'REFERRED'
     ) {
       const embed = createEmbed('❌ Pay it Monthly - Failed/Declined', fields, COLORS.RED);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
+
     } else {
-      // Log unknown statuses so we can handle them
+      // Unknown status — log and route to failed payments, not new payments
       console.log('Unknown Pay it Monthly status:', status, 'Full payload:', JSON.stringify(payload));
-      const embed = createEmbed(`💼 Pay it Monthly - ${status || 'Update'}`, fields, COLORS.BLUE);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_PAYMENTS, embed);
+      if (status) {
+        const embed = createEmbed(`💼 Pay it Monthly - ${status}`, fields, COLORS.BLUE);
+        await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
+      }
+      // If no status at all, ignore silently
     }
 
     res.json({ received: true });
