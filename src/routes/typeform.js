@@ -150,6 +150,25 @@ async function createGHLContact(contactData) {
   }
 }
 
+async function updateGHLContactTags(contactId, tags) {
+  try {
+    await axios.put(
+      `https://services.leadconnectorhq.com/contacts/${contactId}`,
+      { tags },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+          'Content-Type': 'application/json',
+          'Version': '2021-07-28'
+        }
+      }
+    );
+    console.log('GHL contact tags updated:', tags);
+  } catch (err) {
+    console.error('GHL tag update error:', err.response?.status, JSON.stringify(err.response?.data));
+  }
+}
+
 async function createGHLOpportunity(contact, stageId, tierData) {
   try {
     const pipelineId = process.env.GHL_PIPELINE_ID;
@@ -316,7 +335,7 @@ router.post('/webhook', async (req, res) => {
     if (workCircumstances) customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
     if (reasonForChange) customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
 
-    // Always create GHL contact for ALL leads
+    // Create GHL contact — tag as typeform-lead only first
     const contact = await createGHLContact({
       firstName,
       lastName,
@@ -328,7 +347,7 @@ router.post('/webhook', async (req, res) => {
       customFields,
     });
 
-    // Build GHL contact link if we have a contact ID
+    // Build GHL contact link
     const fullName = `${firstName} ${lastName}`.trim() || email;
     if (contact?.id) {
       const ghlLink = getContactGHLLink(contact.id);
@@ -340,6 +359,9 @@ router.post('/webhook', async (req, res) => {
 
     if (hasCalendly) {
       if (contact?.id) {
+        // Add typeform-booked tag so GHL workflow skips this contact
+        await updateGHLContactTags(contact.id, ['typeform-lead', 'typeform-booked', `${tier}-lead`]);
+
         const existing = await findAndUpdateOpportunityStage(
           contact.id,
           process.env.GHL_PIPELINE_BOOKED_STAGE_ID
