@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
 const axios = require('axios');
 
 const processedEmails = new Map();
@@ -21,26 +20,6 @@ function isDuplicateEmail(email) {
     if (now - t > DEDUP_WINDOW_MS) processedEmails.delete(k);
   }
   return false;
-}
-
-function abbreviateTitle(title) {
-  const map = {
-    'how long have you been living in the uk': 'UK Residency',
-    'why are you considering changing your career': 'Reason for Change',
-    'what best describes your work circumstances': 'Work Circumstances',
-    'the investment for our program is': 'Investment',
-    'to be approved for a 12-month payment plan': 'Credit Score',
-    'if you are accepted into our training program': 'Start Timeline',
-    'first name': 'First Name',
-    'last name': 'Last Name',
-    'phone': 'Phone',
-    'email': 'Email',
-  };
-  const lower = title.toLowerCase();
-  for (const [key, val] of Object.entries(map)) {
-    if (lower.includes(key)) return val;
-  }
-  return title;
 }
 
 function isCalendlyBookingUrl(value) {
@@ -109,14 +88,15 @@ function determineLeadTier(answers, fields_def) {
     }
   });
 
+  // Always pitch £2,997 regardless of tier
   if (hasHighIncome) {
-    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances, reasonForChange };
+    return { tier: 'gold', color: 0xFFD700, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   } else if (hasInvestment && hasGoodCreditScore) {
-    return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£1,997', opportunityValue: 1997, source: 'Finance', firstName, lastName, email, phone, workCircumstances, reasonForChange };
+    return { tier: 'gold', color: 0xFFD700, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   } else if (hasInvestment && !hasGoodCreditScore) {
-    return { tier: 'green', color: COLORS.GREEN, prefix: '🟢', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances, reasonForChange };
+    return { tier: 'green', color: 0x00C851, prefix: '🟢', price: '£2,997', opportunityValue: 2997, source: 'UQ', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   } else {
-    return { tier: 'blue', color: COLORS.BLUE, prefix: '📞', price: '£1,997', opportunityValue: 1997, source: 'UQ', firstName, lastName, email, phone, workCircumstances, reasonForChange };
+    return { tier: 'blue', color: 0x0099CC, prefix: '📞', price: '£2,997', opportunityValue: 2997, source: 'UQ', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   }
 }
 
@@ -228,7 +208,7 @@ router.post('/webhook', async (req, res) => {
     const hidden = payload.form_response?.hidden || {};
 
     const tierData = determineLeadTier(answers, fields_def);
-    const { color, prefix, price, firstName, lastName, email, phone, workCircumstances, reasonForChange } = tierData;
+    const { color, prefix, price, firstName, lastName, email, phone, workCircumstances, reasonForChange, tier } = tierData;
 
     if (!email && !phone && !firstName) {
       return res.json({ success: true, skipped: 'no contact info' });
@@ -246,54 +226,47 @@ router.post('/webhook', async (req, res) => {
     answers.forEach((answer, index) => {
       const fieldDef = fields_def[index];
       const rawTitle = fieldDef?.title || `Question ${index + 1}`;
-      const fieldTitle = abbreviateTitle(rawTitle);
-      let value = '';
+      const fieldTitleMap = {
+        'how long have you been living in the uk': 'UK Residency',
+        'why are you considering changing your career': 'Reason for Change',
+        'what best describes your work circumstances': 'Work Circumstances',
+        'the investment for our program is': 'Investment',
+        'to be approved for a 12-month payment plan': 'Credit Score',
+        'if you are accepted into our training program': 'Start Timeline',
+        'first name': 'First Name',
+        'last name': 'Last Name',
+        'phone': 'Phone',
+        'email': 'Email',
+      };
+      const lowerRaw = rawTitle.toLowerCase();
+      let fieldTitle = rawTitle;
+      for (const [key, val] of Object.entries(fieldTitleMap)) {
+        if (lowerRaw.includes(key)) { fieldTitle = val; break; }
+      }
 
+      let value = '';
       switch (answer.type) {
-        case 'text':
-          value = answer.text || '';
-          break;
-        case 'email':
-          value = answer.email || '';
-          break;
-        case 'phone_number':
-          value = answer.phone_number || '';
-          break;
-        case 'choice':
-          value = answer.choice?.label || '';
-          break;
-        case 'choices':
-          value = answer.choices?.labels?.join(', ') || '';
-          break;
-        case 'boolean':
-          value = answer.boolean ? 'Yes' : 'No';
-          break;
-        case 'number':
-          value = String(answer.number) || '';
-          break;
+        case 'text': value = answer.text || ''; break;
+        case 'email': value = answer.email || ''; break;
+        case 'phone_number': value = answer.phone_number || ''; break;
+        case 'choice': value = answer.choice?.label || ''; break;
+        case 'choices': value = answer.choices?.labels?.join(', ') || ''; break;
+        case 'boolean': value = answer.boolean ? 'Yes' : 'No'; break;
+        case 'number': value = String(answer.number) || ''; break;
         case 'calendly':
-          if (!hasCalendly) {
-            hasCalendly = true;
-            calendlyValue = answer.url || 'Call Booked ✅';
-          }
+          if (!hasCalendly) { hasCalendly = true; calendlyValue = answer.url || 'Call Booked ✅'; }
           return;
         case 'url':
           value = answer.url || '';
           if (isCalendlyBookingUrl(value)) {
-            if (!hasCalendly) {
-              hasCalendly = true;
-              calendlyValue = value;
-            }
+            if (!hasCalendly) { hasCalendly = true; calendlyValue = value; }
             return;
           }
           break;
         default:
           value = answer.url || answer.text || answer.email || '';
           if (isCalendlyBookingUrl(value)) {
-            if (!hasCalendly) {
-              hasCalendly = true;
-              calendlyValue = value;
-            }
+            if (!hasCalendly) { hasCalendly = true; calendlyValue = value; }
             return;
           }
       }
@@ -331,12 +304,8 @@ router.post('/webhook', async (req, res) => {
 
     // Build custom fields for GHL contact
     const customFields = [];
-    if (workCircumstances) {
-      customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
-    }
-    if (reasonForChange) {
-      customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
-    }
+    if (workCircumstances) customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
+    if (reasonForChange) customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
 
     // Always create GHL contact for ALL leads
     const contact = await createGHLContact({
@@ -346,7 +315,7 @@ router.post('/webhook', async (req, res) => {
       phone,
       locationId: process.env.GHL_LOCATION_ID,
       source: 'typeform',
-      tags: ['typeform-lead'],
+      tags: ['typeform-lead', `${tier}-lead`],
       customFields,
     });
 
@@ -361,17 +330,9 @@ router.post('/webhook', async (req, res) => {
         }
       }
 
-      const bookedTitle = `${prefix} New Call Booked - ${price}`;
-      const bookedEmbed = createEmbed(bookedTitle, bookedCallFields, color);
-      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, bookedEmbed);
-
     } else {
       if (!isDuplicateEmail(email) && contact?.id) {
         await createGHLOpportunity(contact, process.env.GHL_PIPELINE_STAGE_ID, tierData);
-
-        const newLeadTitle = `${prefix} New Lead - ${price}`;
-        const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
-        await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, newLeadEmbed);
       }
     }
 
