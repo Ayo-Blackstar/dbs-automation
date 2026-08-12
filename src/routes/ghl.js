@@ -26,16 +26,36 @@ function getContactGHLLink(contactId) {
   return `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${contactId}`;
 }
 
-function determineLeadColor(body) {
-  const tags = (body.tags || '').toLowerCase();
-  const leadValue = parseFloat(body.opportunity_value || body.lead_value || '0');
-  if (tags.includes('high value') || tags.includes('gold') || tags.includes('premium') || leadValue >= 2997) {
-    return { color: COLORS.GREEN, prefix: '🟢' };
-  }
-  return { color: COLORS.BLUE, prefix: '📞' };
+function buildCallFields(body, stage) {
+  const contactId = body.contact_id || body.contactId || '';
+  const fullName = body.full_name ||
+    `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
+    body.contact_name || 'Unknown';
+  const ghlLink = getContactGHLLink(contactId);
+
+  const fields = [
+    { name: 'Stage', value: stage, inline: true },
+    { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
+    { name: 'Email', value: body.email || '', inline: true },
+    { name: 'Phone', value: body.phone || '', inline: true },
+    { name: 'Full_name', value: fullName, inline: true },
+    { name: 'Tags', value: body.tags || '', inline: true },
+    { name: 'Country', value: body.country || '', inline: true },
+    { name: 'Timezone', value: body.timezone || '', inline: true },
+    { name: 'Date_created', value: body.date_created || '', inline: true },
+    { name: 'Contact_source', value: body.contact_source || '', inline: true },
+    { name: 'Opportunity_name', value: body.opportunity_name || fullName, inline: true },
+    { name: 'Opportunity_value', value: body.opportunity_value || '', inline: true },
+    { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
+  ];
+
+  if (body.booked_by) fields.push({ name: '📋 Booked By (Setter)', value: body.booked_by, inline: true });
+  if (body.assigned_to) fields.push({ name: '📞 Assigned To (Closer)', value: body.assigned_to, inline: true });
+
+  return fields;
 }
 
-function buildCallFields(body, stage) {
+function buildStageFields(body, stage) {
   const contactId = body.contact_id || body.contactId || '';
   const fullName = body.full_name ||
     `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
@@ -55,8 +75,6 @@ function buildCallFields(body, stage) {
     { name: 'Contact_source', value: body.contact_source || '', inline: true },
     { name: 'Opportunity_name', value: body.opportunity_name || fullName, inline: true },
     { name: 'Opportunity_value', value: body.opportunity_value || '', inline: true },
-    { name: 'Source', value: body.calendar_name || '', inline: true },
-    { name: 'Pipleline_stage', value: stage, inline: true },
     { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
     { name: 'Owner', value: body.assigned_user || '', inline: true },
   ];
@@ -67,9 +85,9 @@ router.post('/booked-call', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `booked-${contactId}-${req.body.email || ''}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-    await new Promise(resolve => setTimeout(resolve, 60000));
-    const { color, prefix } = determineLeadColor(req.body);
-    const embed = createEmbed(`${prefix} Pipeline: Call Booked`, buildCallFields(req.body, 'Call Booked'), color);
+
+    // Setter booked — purple colour
+    const embed = createEmbed('🟣 New Call Booked - SETTER BOOKED', buildCallFields(req.body, 'Call Booked'), COLORS.PURPLE);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
     res.json({ success: true });
   } catch (err) {
@@ -82,8 +100,7 @@ router.post('/confirmed-call', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `confirmed-${contactId}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-    const { color } = determineLeadColor(req.body);
-    const embed = createEmbed('✅ Pipeline: Confirmed Call', buildCallFields(req.body, 'Confirmed'), color);
+    const embed = createEmbed('✅ Pipeline: Confirmed Call', buildStageFields(req.body, 'Confirmed'), COLORS.GREEN);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_CONFIRMED_CALLS, embed);
     res.json({ success: true });
   } catch (err) {
@@ -96,7 +113,7 @@ router.post('/no-show', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `noshow-${contactId}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-    const embed = createEmbed('❌ Pipeline: No Show', buildCallFields(req.body, 'No Show'), COLORS.RED);
+    const embed = createEmbed('❌ Pipeline: No Show', buildStageFields(req.body, 'No Show'), COLORS.RED);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NO_SHOW, embed);
     res.json({ success: true });
   } catch (err) {
@@ -109,7 +126,7 @@ router.post('/follow-up', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `followup-${contactId}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-    const embed = createEmbed('🔄 Pipeline: Follow Up', buildCallFields(req.body, 'Follow Up'), COLORS.YELLOW);
+    const embed = createEmbed('🔄 Pipeline: Follow Up', buildStageFields(req.body, 'Follow Up'), COLORS.YELLOW);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FOLLOW_UP, embed);
     res.json({ success: true });
   } catch (err) {
@@ -122,7 +139,7 @@ router.post('/cancelled', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `cancelled-${contactId}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-    const embed = createEmbed('🚫 Pipeline: Booking Cancelled', buildCallFields(req.body, 'Booking Cancelled'), COLORS.ORANGE);
+    const embed = createEmbed('🚫 Pipeline: Booking Cancelled', buildStageFields(req.body, 'Booking Cancelled'), COLORS.ORANGE);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_CANCELLED, embed);
     res.json({ success: true });
   } catch (err) {
@@ -135,7 +152,7 @@ router.post('/rescheduled', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `rescheduled-${contactId}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-    const embed = createEmbed('🔁 Pipeline: Rescheduled', buildCallFields(req.body, 'Rescheduled'), COLORS.BLUE);
+    const embed = createEmbed('🔁 Pipeline: Rescheduled', buildStageFields(req.body, 'Rescheduled'), COLORS.BLUE);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_RESCHEDULED, embed);
     res.json({ success: true });
   } catch (err) {
