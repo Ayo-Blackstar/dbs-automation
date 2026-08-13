@@ -38,15 +38,11 @@ function buildCallFields(body, stage) {
     { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
     { name: 'Email', value: body.email || '', inline: true },
     { name: 'Phone', value: body.phone || '', inline: true },
-    { name: 'Full_name', value: fullName, inline: true },
     { name: 'Tags', value: body.tags || '', inline: true },
     { name: 'Country', value: body.country || '', inline: true },
     { name: 'Timezone', value: body.timezone || '', inline: true },
     { name: 'Date_created', value: body.date_created || '', inline: true },
     { name: 'Contact_source', value: body.contact_source || '', inline: true },
-    { name: 'Opportunity_name', value: body.opportunity_name || fullName, inline: true },
-    { name: 'Opportunity_value', value: body.opportunity_value || '', inline: true },
-    { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
   ];
 
   if (body.booked_by) fields.push({ name: '📋 Booked By (Setter)', value: body.booked_by, inline: true });
@@ -67,15 +63,11 @@ function buildStageFields(body, stage) {
     { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
     { name: 'Email', value: body.email || '', inline: true },
     { name: 'Phone', value: body.phone || '', inline: true },
-    { name: 'Full_name', value: fullName, inline: true },
     { name: 'Tags', value: body.tags || '', inline: true },
     { name: 'Country', value: body.country || '', inline: true },
     { name: 'Timezone', value: body.timezone || '', inline: true },
     { name: 'Date_created', value: body.date_created || '', inline: true },
     { name: 'Contact_source', value: body.contact_source || '', inline: true },
-    { name: 'Opportunity_name', value: body.opportunity_name || fullName, inline: true },
-    { name: 'Opportunity_value', value: body.opportunity_value || '', inline: true },
-    { name: 'Pipeline_name', value: body.pipeline_name || '', inline: true },
     { name: 'Owner', value: body.assigned_user || '', inline: true },
   ];
 }
@@ -86,7 +78,6 @@ router.post('/booked-call', async (req, res) => {
     const dedupKey = `booked-${contactId}-${req.body.email || ''}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
 
-    // Setter booked — purple colour
     const embed = createEmbed('🟣 New Call Booked - SETTER BOOKED', buildCallFields(req.body, 'Call Booked'), COLORS.PURPLE);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
     res.json({ success: true });
@@ -175,13 +166,10 @@ router.post('/closed-deal', async (req, res) => {
       { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
       { name: 'Email', value: req.body.email || '', inline: true },
       { name: 'Phone', value: req.body.phone || '', inline: true },
-      { name: 'Full_name', value: fullName, inline: true },
       { name: 'Tags', value: req.body.tags || '', inline: true },
       { name: 'Country', value: req.body.country || '', inline: true },
       { name: 'Timezone', value: req.body.timezone || '', inline: true },
-      { name: 'Opportunity_name', value: req.body.opportunity_name || fullName, inline: true },
       { name: 'Opportunity_value', value: req.body.opportunity_value || '', inline: true },
-      { name: 'Pipeline_name', value: req.body.pipeline_name || '', inline: true },
       { name: 'Owner', value: req.body.assigned_user || '', inline: true },
       { name: 'Notes', value: req.body.opportunity_notes || '', inline: false },
     ];
