@@ -31,8 +31,17 @@ router.post('/webhook', async (req, res) => {
       ''
     ).toUpperCase();
 
+    // Extract full name — try combined first, then first+last separately
+    const firstName = application.first_name || application.customer_first_name || '';
+    const lastName = application.last_name || application.customer_last_name || '';
+    const fullName = application.customer_name ||
+      application.name ||
+      payload.customer_name ||
+      (firstName && lastName ? `${firstName} ${lastName}` : firstName || lastName) ||
+      'N/A';
+
     const data = {
-      name: application.customer_name || application.name || payload.customer_name || 'N/A',
+      name: fullName,
       amount: application.amount ? `£${application.amount}` :
               application.financed_amount ? `£${application.financed_amount}` : 'N/A',
       email: application.email || application.customer_email || 'N/A',
@@ -57,13 +66,11 @@ router.post('/webhook', async (req, res) => {
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
 
     } else {
-      // Unknown status — log and route to failed payments, not new payments
       console.log('Unknown Pay it Monthly status:', status, 'Full payload:', JSON.stringify(payload));
       if (status) {
         const embed = createEmbed(`💼 Pay it Monthly - ${status}`, fields, COLORS.BLUE);
         await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
       }
-      // If no status at all, ignore silently
     }
 
     res.json({ received: true });
