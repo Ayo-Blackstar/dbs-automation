@@ -28,10 +28,11 @@ router.post('/webhook', async (req, res) => {
       notification.sub_type ||
       payload.type ||
       payload.event ||
+      payload.notification_type ||
       ''
     ).toUpperCase();
 
-    // Extract full name — try combined first, then first+last separately
+    // Extract full name
     const firstName = application.first_name || application.customer_first_name || '';
     const lastName = application.last_name || application.customer_last_name || '';
     const fullName = application.customer_name ||
@@ -47,19 +48,27 @@ router.post('/webhook', async (req, res) => {
       email: application.email || application.customer_email || 'N/A',
       phone: application.phone || application.customer_phone || 'N/A',
       product: application.product_name || application.description || 'DBS Finance',
-      reference,
+      reference: payload.reference || reference,
       status: status || 'N/A',
     };
 
     const fields = buildPaymentFields(data);
 
-    if (status === 'ACCEPTED' || status === 'APPROVED' || status === 'COMPLETED' || status === 'SIGNED') {
+    if (
+      status === 'ACCEPTED' ||
+      status === 'APPROVED' ||
+      status === 'COMPLETED' ||
+      status === 'SIGNED' ||
+      status === 'ACTIVE'
+    ) {
       const embed = createEmbed('✅ Pay it Monthly - Approved', fields, COLORS.GOLD);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_PAYMENTS, embed);
 
     } else if (
-      status === 'DECLINED' || status === 'EXPIRED' ||
-      status === 'CANCELLED' || status === 'FAILED' ||
+      status === 'DECLINED' ||
+      status === 'EXPIRED' ||
+      status === 'CANCELLED' ||
+      status === 'FAILED' ||
       status === 'REFERRED'
     ) {
       const embed = createEmbed('❌ Pay it Monthly - Failed/Declined', fields, COLORS.RED);
@@ -67,7 +76,7 @@ router.post('/webhook', async (req, res) => {
 
     } else {
       console.log('Unknown Pay it Monthly status:', status, 'Full payload:', JSON.stringify(payload));
-      if (status) {
+      if (status && status !== 'GENERAL_STATUS' && status !== 'FINANCE_APPLICATION_STATUS') {
         const embed = createEmbed(`💼 Pay it Monthly - ${status}`, fields, COLORS.BLUE);
         await sendDiscordMessage(process.env.DISCORD_WEBHOOK_FAILED_PAYMENTS, embed);
       }
