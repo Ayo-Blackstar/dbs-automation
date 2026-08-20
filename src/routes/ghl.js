@@ -47,6 +47,8 @@ function buildCallFields(body, stage) {
 
   if (body.booked_by) fields.push({ name: '📋 Booked By (Setter)', value: body.booked_by, inline: true });
   if (body.assigned_to) fields.push({ name: '📞 Assigned To (Closer)', value: body.assigned_to, inline: true });
+  if (body.rescheduled_by) fields.push({ name: '🔁 Rescheduled By', value: body.rescheduled_by, inline: true });
+  if (body.closed_by) fields.push({ name: '🏆 Closed By', value: body.closed_by, inline: true });
 
   return fields;
 }
@@ -58,7 +60,7 @@ function buildStageFields(body, stage) {
     body.contact_name || 'Unknown';
   const ghlLink = getContactGHLLink(contactId);
 
-  return [
+  const fields = [
     { name: 'Stage', value: stage, inline: true },
     { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
     { name: 'Email', value: body.email || '', inline: true },
@@ -70,10 +72,18 @@ function buildStageFields(body, stage) {
     { name: 'Contact_source', value: body.contact_source || '', inline: true },
     { name: 'Owner', value: body.assigned_user || '', inline: true },
   ];
+
+  if (body.booked_by) fields.push({ name: '📋 Booked By (Setter)', value: body.booked_by, inline: true });
+  if (body.assigned_to) fields.push({ name: '📞 Assigned To (Closer)', value: body.assigned_to, inline: true });
+  if (body.rescheduled_by) fields.push({ name: '🔁 Rescheduled By', value: body.rescheduled_by, inline: true });
+  if (body.closed_by) fields.push({ name: '🏆 Closed By', value: body.closed_by, inline: true });
+
+  return fields;
 }
 
 router.post('/booked-call', async (req, res) => {
   try {
+    console.log('BOOKED-CALL PAYLOAD:', JSON.stringify(req.body));
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `booked-${contactId}-${req.body.email || ''}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
@@ -173,6 +183,9 @@ router.post('/closed-deal', async (req, res) => {
       { name: 'Owner', value: req.body.assigned_user || '', inline: true },
       { name: 'Notes', value: req.body.opportunity_notes || '', inline: false },
     ];
+
+    if (req.body.closed_by) fields.push({ name: '🏆 Closed By', value: req.body.closed_by, inline: true });
+    if (req.body.assigned_to) fields.push({ name: '📞 Assigned To', value: req.body.assigned_to, inline: true });
 
     const embed = createEmbed('🏆 Pipeline: Closed Won', fields, COLORS.GOLD);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_CLOSED_DEAL, embed);
