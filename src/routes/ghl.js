@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { sendDiscordMessage, createEmbed, COLORS } = require('../utils/discord');
+const axios = require('axios');
 
 const recentNotifications = new Map();
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -191,6 +192,60 @@ router.post('/closed-deal', async (req, res) => {
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_CLOSED_DEAL, embed);
     res.json({ success: true });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/update-notes', async (req, res) => {
+  try {
+    console.log('Update notes payload:', JSON.stringify(req.body));
+    const { contact_id, email, notes } = req.body;
+
+    if (!notes) return res.json({ success: false, error: 'No notes provided' });
+
+    let contactId = contact_id;
+
+    // If no contact_id, look up by email
+    if (!contactId && email) {
+      const searchResponse = await axios.get(
+        `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+            'Version': '2021-07-28'
+          }
+        }
+      );
+      const contacts = searchResponse.data?.contacts || [];
+      if (contacts.length > 0) {
+        contactId = contacts[0].id;
+      }
+    }
+
+    if (!contactId) {
+      return res.json({ success: false, error: 'Contact not found' });
+    }
+
+    // Add note to GHL contact
+    await axios.post(
+      `https://services.leadconnectorhq.com/contacts/${contactId}/notes`,
+      {
+        body: `📋 Business Worksheet Notes:\n\n${notes}`,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+          'Content-Type': 'application/json',
+          'Version': '2021-07-28'
+        }
+      }
+    );
+
+    console.log('GHL note added for contact:', contactId);
+    res.json({ success: true, contactId });
+
+  } catch (err) {
+    console.error('Update notes error:', err.response?.data || err.message);
     res.status(500).json({ error: err.message });
   }
 });
