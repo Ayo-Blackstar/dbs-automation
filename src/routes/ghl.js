@@ -207,18 +207,20 @@ router.post('/update-notes', async (req, res) => {
 
     // If no contact_id, look up by email
     if (!contactId && email) {
-      const searchResponse = await axios.get(
-        `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
-            'Version': '2021-07-28'
+      try {
+        const searchResponse = await axios.get(
+          `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+              'Version': '2021-07-28'
+            }
           }
-        }
-      );
-      const contacts = searchResponse.data?.contacts || [];
-      if (contacts.length > 0) {
-        contactId = contacts[0].id;
+        );
+        const contacts = searchResponse.data?.contacts || [];
+        if (contacts.length > 0) contactId = contacts[0].id;
+      } catch (err) {
+        console.error('Contact search error:', err.message);
       }
     }
 
@@ -226,22 +228,51 @@ router.post('/update-notes', async (req, res) => {
       return res.json({ success: false, error: 'Contact not found' });
     }
 
-    // Add note to GHL contact
-    await axios.post(
-      `https://services.leadconnectorhq.com/contacts/${contactId}/notes`,
-      {
-        body: `📋 Business Worksheet Notes:\n\n${notes}`,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Version': '2021-07-28'
-        }
-      }
-    );
+    const noteBody = `📋 Business Worksheet Notes:\n\n${notes}`;
+    const headers = {
+      'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+      'Content-Type': 'application/json',
+      'Version': '2021-07-28'
+    };
 
-    console.log('GHL note added for contact:', contactId);
+    // 1. Add note to GHL contact notes
+    try {
+      await axios.post(
+        `https://services.leadconnectorhq.com/contacts/${contactId}/notes`,
+        { body: noteBody },
+        { headers }
+      );
+      console.log('Contact note added for:', contactId);
+    } catch (err) {
+      console.error('Contact note error:', err.response?.data || err.message);
+    }
+
+    // 2. Find opportunity and add note there too
+    try {
+      const oppResponse = await axios.get(
+        `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
+        { headers }
+      );
+      const opportunities = oppResponse.data?.opportunities || [];
+      const pipelineId = process.env.GHL_PIPELINE_ID;
+      const opportunity = pipelineId
+        ? opportunities.find(o => o.pipelineId === pipelineId)
+        : opportunities[0];
+
+      if (opportunity) {
+        await axios.post(
+          `https://services.leadconnectorhq.com/opportunities/${opportunity.id}/notes`,
+          { body: noteBody },
+          { headers }
+        );
+        console.log('Opportunity note added for:', opportunity.id);
+      } else {
+        console.log('No opportunity found for contact:', contactId);
+      }
+    } catch (err) {
+      console.error('Opportunity note error:', err.response?.data || err.message);
+    }
+
     res.json({ success: true, contactId });
 
   } catch (err) {
