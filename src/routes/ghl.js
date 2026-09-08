@@ -27,6 +27,13 @@ function getContactGHLLink(contactId) {
   return `https://app.gohighlevel.com/v2/location/${locationId}/contacts/detail/${contactId}`;
 }
 
+const OUR_TAGS = ['typeform-lead', 'typeform-booked', 'gold-lead', 'green-lead', 'blue-lead'];
+
+function filterTags(tags) {
+  if (!tags) return '';
+  return tags.split(',').map(t => t.trim()).filter(t => OUR_TAGS.includes(t)).join(', ');
+}
+
 function buildCallFields(body, stage) {
   const contactId = body.contact_id || body.contactId || '';
   const fullName = body.full_name ||
@@ -39,7 +46,7 @@ function buildCallFields(body, stage) {
     { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
     { name: 'Email', value: body.email || '', inline: true },
     { name: 'Phone', value: body.phone || '', inline: true },
-    { name: 'Tags', value: body.tags || '', inline: true },
+    { name: 'Tags', value: filterTags(body.tags), inline: true },
     { name: 'Country', value: body.country || '', inline: true },
     { name: 'Timezone', value: body.timezone || '', inline: true },
     { name: 'Date_created', value: body.date_created || '', inline: true },
@@ -66,7 +73,7 @@ function buildStageFields(body, stage) {
     { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
     { name: 'Email', value: body.email || '', inline: true },
     { name: 'Phone', value: body.phone || '', inline: true },
-    { name: 'Tags', value: body.tags || '', inline: true },
+    { name: 'Tags', value: filterTags(body.tags), inline: true },
     { name: 'Country', value: body.country || '', inline: true },
     { name: 'Timezone', value: body.timezone || '', inline: true },
     { name: 'Date_created', value: body.date_created || '', inline: true },
@@ -88,7 +95,6 @@ router.post('/booked-call', async (req, res) => {
     const contactId = req.body.contact_id || req.body.contactId || '';
     const dedupKey = `booked-${contactId}-${req.body.email || ''}`;
     if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
-
     const embed = createEmbed('🟣 New Call Booked - SETTER BOOKED', buildCallFields(req.body, 'Call Booked'), COLORS.PURPLE);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
     res.json({ success: true });
@@ -177,7 +183,7 @@ router.post('/closed-deal', async (req, res) => {
       { name: 'Name', value: `[${fullName}](${ghlLink})`, inline: true },
       { name: 'Email', value: req.body.email || '', inline: true },
       { name: 'Phone', value: req.body.phone || '', inline: true },
-      { name: 'Tags', value: req.body.tags || '', inline: true },
+      { name: 'Tags', value: filterTags(req.body.tags), inline: true },
       { name: 'Country', value: req.body.country || '', inline: true },
       { name: 'Timezone', value: req.body.timezone || '', inline: true },
       { name: 'Opportunity_value', value: req.body.opportunity_value || '', inline: true },
@@ -205,7 +211,6 @@ router.post('/update-notes', async (req, res) => {
 
     let contactId = contact_id;
 
-    // If no contact_id, look up by email
     if (!contactId && email) {
       try {
         const searchResponse = await axios.get(
@@ -224,9 +229,7 @@ router.post('/update-notes', async (req, res) => {
       }
     }
 
-    if (!contactId) {
-      return res.json({ success: false, error: 'Contact not found' });
-    }
+    if (!contactId) return res.json({ success: false, error: 'Contact not found' });
 
     const noteBody = `📋 Business Worksheet Notes:\n\n${notes}`;
     const headers = {
@@ -235,7 +238,6 @@ router.post('/update-notes', async (req, res) => {
       'Version': '2021-07-28'
     };
 
-    // 1. Add note to GHL contact notes
     try {
       await axios.post(
         `https://services.leadconnectorhq.com/contacts/${contactId}/notes`,
@@ -247,7 +249,6 @@ router.post('/update-notes', async (req, res) => {
       console.error('Contact note error:', err.response?.data || err.message);
     }
 
-    // 2. Find opportunity and add note there too
     try {
       const oppResponse = await axios.get(
         `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
@@ -266,8 +267,6 @@ router.post('/update-notes', async (req, res) => {
           { headers }
         );
         console.log('Opportunity note added for:', opportunity.id);
-      } else {
-        console.log('No opportunity found for contact:', contactId);
       }
     } catch (err) {
       console.error('Opportunity note error:', err.response?.data || err.message);
