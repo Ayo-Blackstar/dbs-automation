@@ -31,6 +31,9 @@ function abbreviateTitle(title) {
     'the investment for our program is': 'Investment',
     'to be approved for a 12-month payment plan': 'Credit Score',
     'if you are accepted into our training program': 'Start Timeline',
+    'if you do decide you want to make the transition, how soon would you like to move into a new career': 'Timeline',
+    'how much are you currently earning per year': 'Income',
+    'what is your current job title or role': 'Current Job',
     'first name': 'First Name',
     'last name': 'Last Name',
     'phone': 'Phone',
@@ -69,14 +72,8 @@ function determineLeadTier(answers, fields_def) {
 
     if (answer.type === 'choice') value = answer.choice?.label || '';
     else if (answer.type === 'text') value = answer.text || '';
-    else if (answer.type === 'email') {
-      value = answer.email || '';
-      email = value;
-    }
-    else if (answer.type === 'phone_number') {
-      value = answer.phone_number || '';
-      phone = value;
-    }
+    else if (answer.type === 'email') { value = answer.email || ''; email = value; }
+    else if (answer.type === 'phone_number') { value = answer.phone_number || ''; phone = value; }
 
     const valueLower = value.toLowerCase();
 
@@ -86,6 +83,16 @@ function determineLeadTier(answers, fields_def) {
     if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) {
       workCircumstances = value;
       if (valueLower.includes('earning above £35k') || valueLower.includes('above £35k')) {
+        hasHighIncome = true;
+      }
+    }
+
+    if (fieldTitle.includes('earning per year') || fieldTitle.includes('currently earning')) {
+      if (
+        valueLower.includes('35k') || valueLower.includes('45k') ||
+        valueLower.includes('60k') || valueLower.includes('over') ||
+        valueLower.includes('£35') || valueLower.includes('£45') || valueLower.includes('£60')
+      ) {
         hasHighIncome = true;
       }
     }
@@ -102,10 +109,8 @@ function determineLeadTier(answers, fields_def) {
 
     if (fieldTitle.includes('credit score') || fieldTitle.includes('experian')) {
       if (
-        valueLower.includes('800+') ||
-        valueLower.includes('800') ||
-        valueLower.includes('701 - 800') ||
-        valueLower.includes('701') ||
+        valueLower.includes('800+') || valueLower.includes('800') ||
+        valueLower.includes('701 - 800') || valueLower.includes('701') ||
         valueLower.includes('600 - 700')
       ) {
         hasGoodCreditScore = true;
@@ -113,7 +118,6 @@ function determineLeadTier(answers, fields_def) {
     }
   });
 
-  // Always pitch £2,997
   if (hasHighIncome) {
     return { tier: 'gold', color: COLORS.GOLD, prefix: '🥇', price: '£2,997', opportunityValue: 2997, source: 'Finance', firstName, lastName, email, phone, workCircumstances, reasonForChange };
   } else if (hasInvestment && hasGoodCreditScore) {
@@ -150,11 +154,11 @@ async function createGHLContact(contactData) {
   }
 }
 
-async function updateGHLContactTags(contactId, tags) {
+async function updateGHLContact(contactId, data) {
   try {
     await axios.put(
       `https://services.leadconnectorhq.com/contacts/${contactId}`,
-      { tags },
+      data,
       {
         headers: {
           'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
@@ -163,9 +167,9 @@ async function updateGHLContactTags(contactId, tags) {
         }
       }
     );
-    console.log('GHL contact tags updated:', tags);
+    console.log('GHL contact updated:', contactId);
   } catch (err) {
-    console.error('GHL tag update error:', err.response?.status, JSON.stringify(err.response?.data));
+    console.error('GHL contact update error:', err.response?.status, JSON.stringify(err.response?.data));
   }
 }
 
@@ -173,9 +177,7 @@ async function createGHLOpportunity(contact, stageId, tierData) {
   try {
     const pipelineId = process.env.GHL_PIPELINE_ID;
     if (!pipelineId || !stageId || !contact?.id) return null;
-
     const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'New Lead';
-
     const response = await axios.post(
       'https://services.leadconnectorhq.com/opportunities/',
       {
@@ -208,7 +210,6 @@ async function findAndUpdateOpportunityStage(contactId, stageId) {
   try {
     const pipelineId = process.env.GHL_PIPELINE_ID;
     if (!pipelineId || !stageId || !contactId) return null;
-
     const response = await axios.get(
       `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
       {
@@ -218,10 +219,8 @@ async function findAndUpdateOpportunityStage(contactId, stageId) {
         }
       }
     );
-
     const opportunities = response.data?.opportunities || [];
     const opportunity = opportunities.find(o => o.pipelineId === pipelineId);
-
     if (opportunity) {
       await axios.put(
         `https://services.leadconnectorhq.com/opportunities/${opportunity.id}`,
@@ -242,6 +241,13 @@ async function findAndUpdateOpportunityStage(contactId, stageId) {
     console.error('GHL opportunity update error:', err.response?.status, JSON.stringify(err.response?.data));
     return null;
   }
+}
+
+const OUR_TAGS = ['typeform-lead', 'typeform-booked', 'gold-lead', 'green-lead', 'blue-lead'];
+
+function filterTags(tags) {
+  if (!tags) return '';
+  return tags.split(',').map(t => t.trim()).filter(t => OUR_TAGS.includes(t)).join(', ');
 }
 
 router.post('/webhook', async (req, res) => {
@@ -311,16 +317,12 @@ router.post('/webhook', async (req, res) => {
     });
 
     if (hasCalendly && calendlyValue) {
-      bookedCallFields.push({
-        name: 'Call Booking',
-        value: String(calendlyValue).substring(0, 1024),
-        inline: true
-      });
+      bookedCallFields.push({ name: 'Call Booking', value: String(calendlyValue).substring(0, 1024), inline: true });
     }
 
     if (hidden && Object.keys(hidden).length > 0) {
       const utmLines = Object.entries(hidden)
-        .filter(([k, v]) => v)
+        .filter(([k, v]) => v && v.trim() && v !== 'hidden_value')
         .map(([k, v]) => `**${k}:** ${v}`)
         .join('\n');
       if (utmLines) {
@@ -330,12 +332,10 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Build custom fields for GHL contact
     const customFields = [];
     if (workCircumstances) customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
     if (reasonForChange) customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
 
-    // Create GHL contact — tag as typeform-lead only first
     const contact = await createGHLContact({
       firstName,
       lastName,
@@ -347,7 +347,6 @@ router.post('/webhook', async (req, res) => {
       customFields,
     });
 
-    // Build GHL contact link
     const fullName = `${firstName} ${lastName}`.trim() || email;
     if (contact?.id) {
       const ghlLink = getContactGHLLink(contact.id);
@@ -359,13 +358,15 @@ router.post('/webhook', async (req, res) => {
 
     if (hasCalendly) {
       if (contact?.id) {
-        // Add typeform-booked tag so GHL workflow skips this contact
-        await updateGHLContactTags(contact.id, ['typeform-lead', 'typeform-booked', `${tier}-lead`]);
+        const updateData = {
+          tags: ['typeform-lead', 'typeform-booked', `${tier}-lead`],
+        };
+        if (phone) updateData.phone = phone;
+        if (firstName) updateData.firstName = firstName;
+        if (lastName) updateData.lastName = lastName;
+        await updateGHLContact(contact.id, updateData);
 
-        const existing = await findAndUpdateOpportunityStage(
-          contact.id,
-          process.env.GHL_PIPELINE_BOOKED_STAGE_ID
-        );
+        const existing = await findAndUpdateOpportunityStage(contact.id, process.env.GHL_PIPELINE_BOOKED_STAGE_ID);
         if (!existing) {
           await createGHLOpportunity(contact, process.env.GHL_PIPELINE_BOOKED_STAGE_ID, tierData);
         }
