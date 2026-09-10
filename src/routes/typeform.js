@@ -243,11 +243,41 @@ async function findAndUpdateOpportunityStage(contactId, stageId) {
   }
 }
 
-const OUR_TAGS = ['typeform-lead', 'typeform-booked', 'gold-lead', 'green-lead', 'blue-lead'];
+async function addGHLNote(contactId, noteText) {
+  try {
+    const headers = {
+      'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+      'Content-Type': 'application/json',
+      'Version': '2021-07-28'
+    };
 
-function filterTags(tags) {
-  if (!tags) return '';
-  return tags.split(',').map(t => t.trim()).filter(t => OUR_TAGS.includes(t)).join(', ');
+    // Add to contact notes
+    await axios.post(
+      `https://services.leadconnectorhq.com/contacts/${contactId}/notes`,
+      { body: noteText },
+      { headers }
+    );
+    console.log('Contact note added for:', contactId);
+
+    // Find opportunity and update notes
+    const oppResponse = await axios.get(
+      `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
+      { headers }
+    );
+    const opportunities = oppResponse.data?.opportunities || [];
+    const opportunity = opportunities.find(o => o.pipelineId === process.env.GHL_PIPELINE_ID) || opportunities[0];
+
+    if (opportunity) {
+      await axios.put(
+        `https://services.leadconnectorhq.com/opportunities/${opportunity.id}`,
+        { notes: noteText },
+        { headers }
+      );
+      console.log('Opportunity notes updated for:', opportunity.id);
+    }
+  } catch (err) {
+    console.error('GHL note error:', err.response?.data || err.message);
+  }
 }
 
 router.post('/webhook', async (req, res) => {
@@ -268,6 +298,7 @@ router.post('/webhook', async (req, res) => {
     const bookedCallFields = [];
     let hasCalendly = false;
     let calendlyValue = '';
+    const noteLines = ['📋 DBS Application:\n'];
 
     const now = new Date().toLocaleDateString('en-GB');
     newLeadFields.push({ name: 'Time', value: now, inline: true });
@@ -306,6 +337,7 @@ router.post('/webhook', async (req, res) => {
       }
 
       if (value) {
+        noteLines.push(`${fieldTitle}: ${value}`);
         const field = {
           name: fieldTitle.substring(0, 256),
           value: String(value).substring(0, 1024),
@@ -329,8 +361,11 @@ router.post('/webhook', async (req, res) => {
         const utmField = { name: 'ATTRIBUTION', value: utmLines, inline: false };
         newLeadFields.push(utmField);
         bookedCallFields.push(utmField);
+        noteLines.push(`\nUTM Attribution:\n${utmLines}`);
       }
     }
+
+    const noteText = noteLines.join('\n');
 
     const customFields = [];
     if (workCircumstances) customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
@@ -370,6 +405,9 @@ router.post('/webhook', async (req, res) => {
         if (!existing) {
           await createGHLOpportunity(contact, process.env.GHL_PIPELINE_BOOKED_STAGE_ID, tierData);
         }
+
+        // Add form answers as note
+        await addGHLNote(contact.id, noteText);
       }
 
       const bookedTitle = `${prefix} New Call Booked - ${price}`;
@@ -379,6 +417,9 @@ router.post('/webhook', async (req, res) => {
     } else {
       if (!isDuplicateEmail(email) && contact?.id) {
         await createGHLOpportunity(contact, process.env.GHL_PIPELINE_STAGE_ID, tierData);
+
+        // Add form answers as note
+        await addGHLNote(contact.id, noteText);
 
         const newLeadTitle = `${prefix} New Lead - ${price}`;
         const newLeadEmbed = createEmbed(newLeadTitle, newLeadFields, color);
