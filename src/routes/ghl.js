@@ -168,6 +168,19 @@ router.post('/rescheduled', async (req, res) => {
   }
 });
 
+router.post('/second-call', async (req, res) => {
+  try {
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `secondcall-${contactId}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+    const embed = createEmbed('📲 Pipeline: 2nd Call', buildStageFields(req.body, '2nd Call'), COLORS.BLUE);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_SECOND_CALL, embed);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/closed-deal', async (req, res) => {
   try {
     const contactId = req.body.contact_id || req.body.contactId || '';
