@@ -215,6 +215,111 @@ router.post('/closed-deal', async (req, res) => {
   }
 });
 
+router.post('/call-ended', async (req, res) => {
+  try {
+    console.log('CALL-ENDED PAYLOAD:', JSON.stringify(req.body));
+    const { contact_id, conversation_id, call_duration, assigned_to, transcript, summary } = req.body;
+
+    if (!contact_id) return res.json({ success: false, error: 'No contact ID' });
+
+    const headers = {
+      'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
+      'Content-Type': 'application/json',
+      'Version': '2021-07-28'
+    };
+
+    // Get contact details
+    let contactName = 'Unknown';
+    try {
+      const contactRes = await axios.get(
+        `https://services.leadconnectorhq.com/contacts/${contact_id}`,
+        { headers }
+      );
+      const contact = contactRes.data?.contact;
+      contactName = `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim() || contact?.email || 'Unknown';
+    } catch (err) {
+      console.error('Contact fetch error:', err.message);
+    }
+
+    // Get transcript from conversation if not passed directly
+    let callTranscript = transcript || summary || '';
+    if (!callTranscript && conversation_id) {
+      try {
+        const convRes = await axios.get(
+          `https://services.leadconnectorhq.com/conversations/${conversation_id}/messages`,
+          { headers }
+        );
+        const messages = convRes.data?.messages || [];
+        const callMessages = messages.filter(m =>
+          m.type === 'TYPE_CALL' || m.messageType === 'TYPE_CALL' ||
+          m.type === 10 || m.type === 'CALL'
+        );
+        if (callMessages.length > 0) {
+          const lastCall = callMessages[0];
+          callTranscript = lastCall.body || lastCall.transcript || lastCall.meta?.transcript || '';
+        }
+      } catch (err) {
+        console.error('Conversation fetch error:', err.message);
+      }
+    }
+
+    const setterName = assigned_to || req.body.user_name || req.body.assigned_user || 'Unknown Setter';
+    const duration = call_duration ? `${Math.floor(call_duration / 60)}m ${call_duration % 60}s` : 'N/A';
+    const now = new Date().toLocaleString('en-GB');
+
+    const noteText = `📞 Setter Call Notes (${now})\n\nSetter: ${setterName}\nContact: ${contactName}\nDuration: ${duration}\n\n${callTranscript || 'No transcript available'}`;
+
+    // Add note to GHL contact
+    try {
+      await axios.post(
+        `https://services.leadconnectorhq.com/contacts/${contact_id}/notes`,
+        { body: noteText },
+        { headers }
+      );
+      console.log('Call note added to contact:', contact_id);
+    } catch (err) {
+      console.error('Contact note error:', err.message);
+    }
+
+    // Find opportunity and update notes
+    try {
+      const oppRes = await axios.get(
+        `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contact_id}`,
+        { headers }
+      );
+      const opportunities = oppRes.data?.opportunities || [];
+      const opportunity = opportunities.find(o => o.pipelineId === process.env.GHL_PIPELINE_ID) || opportunities[0];
+      if (opportunity) {
+        await axios.put(
+          `https://services.leadconnectorhq.com/opportunities/${opportunity.id}`,
+          { notes: noteText },
+          { headers }
+        );
+        console.log('Opportunity notes updated:', opportunity.id);
+      }
+    } catch (err) {
+      console.error('Opportunity note error:', err.message);
+    }
+
+    // Send to Discord setting call notes channel
+    const ghlLink = getContactGHLLink(contact_id);
+    const fields = [
+      { name: '📞 Setter', value: setterName, inline: true },
+      { name: '👤 Contact', value: `[${contactName}](${ghlLink})`, inline: true },
+      { name: '⏱️ Duration', value: duration, inline: true },
+      { name: '📋 Transcript / Notes', value: (callTranscript || 'No transcript available').substring(0, 1024), inline: false },
+    ];
+
+    const embed = createEmbed('📞 Setter Call Completed', fields, COLORS.BLUE);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_SETTING_CALL_NOTES, embed);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Call ended error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/update-notes', async (req, res) => {
   try {
     console.log('Update notes payload:', JSON.stringify(req.body));
