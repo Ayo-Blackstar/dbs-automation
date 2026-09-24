@@ -218,23 +218,9 @@ router.post('/closed-deal', async (req, res) => {
 router.post('/call-ended', async (req, res) => {
   try {
     console.log('CALL-ENDED PAYLOAD:', JSON.stringify(req.body));
-    const {
-      contact_id,
-      conversation_id,
-      call_duration,
-      assigned_to,
-      transcript,
-      summary,
-      recording_url
-    } = req.body;
+    const { contact_id, call_duration, assigned_to } = req.body;
 
     if (!contact_id) return res.json({ success: false, error: 'No contact ID' });
-
-    // Skip if no transcript, summary or recording — nothing useful to show
-    if (!transcript && !summary && !recording_url) {
-      console.log('No transcript, summary or recording — skipping');
-      return res.json({ success: true, skipped: 'no content' });
-    }
 
     const headers = {
       'Authorization': `Bearer ${process.env.GHL_API_KEY}`,
@@ -255,13 +241,69 @@ router.post('/call-ended', async (req, res) => {
       console.error('Contact fetch error:', err.message);
     }
 
+    // Search for conversation by contact ID
+    let conversationId = '';
+    let transcript = '';
+    try {
+      const convSearchRes = await axios.get(
+        `https://services.leadconnectorhq.com/conversations/search?locationId=${process.env.GHL_LOCATION_ID}&contactId=${contact_id}`,
+        { headers }
+      );
+      const conversations = convSearchRes.data?.conversations || [];
+      console.log('Conversations found:', conversations.length);
+      if (conversations.length > 0) {
+        conversationId = conversations[0].id;
+      }
+    } catch (err) {
+      console.error('Conversation search error:', err.message);
+    }
+
+    // Get messages from conversation to find transcript
+    if (conversationId) {
+      try {
+        const messagesRes = await axios.get(
+          `https://services.leadconnectorhq.com/conversations/${conversationId}/messages`,
+          { headers }
+        );
+        const messages = messagesRes.data?.messages || [];
+        console.log('Messages found:', messages.length);
+        console.log('Message types:', messages.map(m => m.type || m.messageType).join(', '));
+
+        // Find call messages with transcript
+        const callMessages = messages.filter(m =>
+          m.type === 'TYPE_CALL' ||
+          m.messageType === 'TYPE_CALL' ||
+          m.type === 10 ||
+          m.contentType === 'call' ||
+          (m.meta && m.meta.transcript)
+        );
+
+        console.log('Call messages found:', callMessages.length);
+
+        if (callMessages.length > 0) {
+          const latestCall = callMessages[0];
+          console.log('Latest call message:', JSON.stringify(latestCall));
+          transcript = latestCall.meta?.transcript ||
+                      latestCall.meta?.summary ||
+                      latestCall.body ||
+                      latestCall.transcript ||
+                      '';
+        }
+      } catch (err) {
+        console.error('Messages fetch error:', err.message);
+      }
+    }
+
+    if (!transcript) {
+      console.log('No transcript found — skipping');
+      return res.json({ success: true, skipped: 'no transcript' });
+    }
+
     const setterName = assigned_to || 'Unknown Setter';
     const duration = call_duration ? `${Math.floor(call_duration / 60)}m ${call_duration % 60}s` : 'N/A';
     const now = new Date().toLocaleString('en-GB');
 
-    // Build note text
-    const callContent = summary || transcript || '';
-    const noteText = `📞 Setter Call Notes (${now})\n\nSetter: ${setterName}\nContact: ${contactName}\nDuration: ${duration}${recording_url ? `\nRecording: ${recording_url}` : ''}\n\n${callContent || 'No transcript available'}`;
+    const noteText = `📞 Setter Call Notes (${now})\n\nSetter: ${setterName}\nContact: ${contactName}\nDuration: ${duration}\n\n${transcript}`;
 
     // Add note to GHL contact
     try {
@@ -301,17 +343,8 @@ router.post('/call-ended', async (req, res) => {
       { name: '📞 Setter', value: setterName, inline: true },
       { name: '👤 Contact', value: `[${contactName}](${ghlLink})`, inline: true },
       { name: '⏱️ Duration', value: duration, inline: true },
+      { name: '📋 Transcript', value: transcript.substring(0, 1024), inline: false },
     ];
-
-    if (summary) {
-      fields.push({ name: '📋 Summary', value: summary.substring(0, 1024), inline: false });
-    }
-    if (transcript && !summary) {
-      fields.push({ name: '📋 Transcript', value: transcript.substring(0, 1024), inline: false });
-    }
-    if (recording_url) {
-      fields.push({ name: '🎙️ Recording', value: recording_url, inline: false });
-    }
 
     const embed = createEmbed('📞 Setter Call Completed', fields, COLORS.BLUE);
     await sendDiscordMessage(process.env.DISCORD_WEBHOOK_SETTING_CALL_NOTES, embed);
