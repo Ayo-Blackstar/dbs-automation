@@ -89,6 +89,38 @@ function buildStageFields(body, stage) {
   return fields;
 }
 
+// ── NEW LEAD (Webinar Funnel) ──────────────────────────────────────────────
+router.post('/new-lead', async (req, res) => {
+  try {
+    console.log('NEW-LEAD PAYLOAD:', JSON.stringify(req.body));
+    const contactId = req.body.contact_id || req.body.contactId || '';
+    const dedupKey = `new-lead-${contactId}-${req.body.email || ''}`;
+    if (isDuplicate(dedupKey)) return res.json({ success: true, skipped: 'duplicate' });
+
+    const fullName = req.body.full_name ||
+      `${req.body.first_name || ''} ${req.body.last_name || ''}`.trim() ||
+      req.body.contact_name || 'Unknown';
+    const ghlLink = getContactGHLLink(contactId);
+
+    const fields = [
+      { name: '👤 Name', value: `[${fullName}](${ghlLink})`, inline: true },
+      { name: '📧 Email', value: req.body.email || '', inline: true },
+      { name: '📞 Phone', value: req.body.phone || '', inline: true },
+      { name: '💼 Employment Status', value: req.body.employment_status || req.body.contact_source || '', inline: true },
+      { name: '🌍 Country', value: req.body.country || '', inline: true },
+      { name: '🕐 Timezone', value: req.body.timezone || '', inline: true },
+      { name: '📅 Date Registered', value: req.body.date_created || '', inline: true },
+    ];
+
+    const embed = createEmbed('🙋 New Webinar Lead', fields, COLORS.GREEN);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('New lead error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/booked-call', async (req, res) => {
   try {
     console.log('BOOKED-CALL PAYLOAD:', JSON.stringify(req.body));
