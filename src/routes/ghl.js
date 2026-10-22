@@ -106,7 +106,7 @@ router.post('/new-lead', async (req, res) => {
       { name: '👤 Name', value: `[${fullName}](${ghlLink})`, inline: true },
       { name: '📧 Email', value: req.body.email || '', inline: true },
       { name: '📞 Phone', value: req.body.phone || '', inline: true },
-      { name: '💼 Employment Status', value: req.body.employment_status || req.body.contact_source || '', inline: true },
+      { name: '💼 Employment Status', value: req.body.work_circumstances || '', inline: true },
       { name: '🌍 Country', value: req.body.country || '', inline: true },
       { name: '🕐 Timezone', value: req.body.timezone || '', inline: true },
       { name: '📅 Date Registered', value: req.body.date_created || '', inline: true },
