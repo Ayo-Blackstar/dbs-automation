@@ -251,7 +251,6 @@ async function addGHLNote(contactId, noteText) {
       'Version': '2021-07-28'
     };
 
-    // Add to contact notes
     await axios.post(
       `https://services.leadconnectorhq.com/contacts/${contactId}/notes`,
       { body: noteText },
@@ -259,7 +258,6 @@ async function addGHLNote(contactId, noteText) {
     );
     console.log('Contact note added for:', contactId);
 
-    // Find opportunity and update notes
     const oppResponse = await axios.get(
       `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
       { headers }
@@ -280,6 +278,7 @@ async function addGHLNote(contactId, noteText) {
   }
 }
 
+// ── MAIN APPLICATION FORM ─────────────────────────────────────────────────
 router.post('/webhook', async (req, res) => {
   try {
     const payload = req.body;
@@ -406,7 +405,6 @@ router.post('/webhook', async (req, res) => {
           await createGHLOpportunity(contact, process.env.GHL_PIPELINE_BOOKED_STAGE_ID, tierData);
         }
 
-        // Add form answers as note
         await addGHLNote(contact.id, noteText);
       }
 
@@ -418,7 +416,6 @@ router.post('/webhook', async (req, res) => {
       if (!isDuplicateEmail(email) && contact?.id) {
         await createGHLOpportunity(contact, process.env.GHL_PIPELINE_STAGE_ID, tierData);
 
-        // Add form answers as note
         await addGHLNote(contact.id, noteText);
 
         const newLeadTitle = `${prefix} New Lead - ${price}`;
@@ -430,6 +427,173 @@ router.post('/webhook', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Typeform error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── WEBINAR BOOKING FORM ──────────────────────────────────────────────────
+// Always gold — Ayo's instruction: all webinar bookings are gold tier
+router.post('/webinar-webhook', async (req, res) => {
+  try {
+    console.log('WEBINAR TYPEFORM PAYLOAD:', JSON.stringify(req.body));
+    const payload = req.body;
+    const answers = payload.form_response?.answers || [];
+    const fields_def = payload.form_response?.definition?.fields || [];
+    const hidden = payload.form_response?.hidden || {};
+
+    // Extract contact info from answers
+    let firstName = '';
+    let lastName = '';
+    let email = '';
+    let phone = '';
+    let workCircumstances = '';
+    let reasonForChange = '';
+    let hasCalendly = false;
+    let calendlyValue = '';
+
+    answers.forEach((answer, index) => {
+      const fieldDef = fields_def[index];
+      const fieldTitle = (fieldDef?.title || '').toLowerCase();
+
+      if (answer.type === 'text') {
+        if (fieldTitle.includes('first name')) firstName = answer.text || '';
+        else if (fieldTitle.includes('last name')) lastName = answer.text || '';
+      } else if (answer.type === 'email') {
+        email = answer.email || '';
+      } else if (answer.type === 'phone_number') {
+        phone = answer.phone_number || '';
+      } else if (answer.type === 'choice') {
+        const val = answer.choice?.label || '';
+        if (fieldTitle.includes('work circumstances') || fieldTitle.includes('circumstances')) workCircumstances = val;
+        if (fieldTitle.includes('why are you considering') || fieldTitle.includes('changing your career')) reasonForChange = val;
+      } else if (answer.type === 'calendly') {
+        if (!hasCalendly) { hasCalendly = true; calendlyValue = answer.url || 'Call Booked ✅'; }
+      } else if (answer.type === 'url') {
+        const val = answer.url || '';
+        if (isCalendlyBookingUrl(val) && !hasCalendly) { hasCalendly = true; calendlyValue = val; }
+      }
+    });
+
+    if (!email && !phone && !firstName) {
+      return res.json({ success: true, skipped: 'no contact info' });
+    }
+
+    if (isDuplicateEmail(email)) {
+      return res.json({ success: true, skipped: 'duplicate' });
+    }
+
+    // Always gold for webinar
+    const tierData = {
+      tier: 'gold',
+      color: COLORS.GOLD,
+      prefix: '🥇',
+      price: '£2,997',
+      opportunityValue: 2997,
+      source: 'Webinar',
+    };
+
+    const noteLines = ['📋 DBS Webinar Booking:\n'];
+    const discordFields = [];
+    const now = new Date().toLocaleDateString('en-GB');
+    discordFields.push({ name: 'Time', value: now, inline: true });
+    discordFields.push({ name: '📌 Source', value: 'Webinar', inline: true });
+
+    answers.forEach((answer, index) => {
+      const fieldDef = fields_def[index];
+      const rawTitle = fieldDef?.title || `Question ${index + 1}`;
+      const fieldTitle = abbreviateTitle(rawTitle);
+      let value = '';
+
+      switch (answer.type) {
+        case 'text': value = answer.text || ''; break;
+        case 'email': value = answer.email || ''; break;
+        case 'phone_number': value = answer.phone_number || ''; break;
+        case 'choice': value = answer.choice?.label || ''; break;
+        case 'choices': value = answer.choices?.labels?.join(', ') || ''; break;
+        case 'boolean': value = answer.boolean ? 'Yes' : 'No'; break;
+        case 'number': value = String(answer.number) || ''; break;
+        case 'calendly':
+        case 'url':
+          if (isCalendlyBookingUrl(answer.url || '')) return;
+          value = answer.url || '';
+          break;
+        default:
+          value = answer.url || answer.text || answer.email || '';
+          if (isCalendlyBookingUrl(value)) return;
+      }
+
+      if (value) {
+        noteLines.push(`${fieldTitle}: ${value}`);
+        discordFields.push({
+          name: fieldTitle.substring(0, 256),
+          value: String(value).substring(0, 1024),
+          inline: true
+        });
+      }
+    });
+
+    if (hasCalendly && calendlyValue) {
+      discordFields.push({ name: 'Call Booking', value: String(calendlyValue).substring(0, 1024), inline: true });
+    }
+
+    if (hidden && Object.keys(hidden).length > 0) {
+      const utmLines = Object.entries(hidden)
+        .filter(([k, v]) => v && v.trim() && v !== 'hidden_value')
+        .map(([k, v]) => `**${k}:** ${v}`)
+        .join('\n');
+      if (utmLines) {
+        discordFields.push({ name: 'ATTRIBUTION', value: utmLines, inline: false });
+        noteLines.push(`\nUTM Attribution:\n${utmLines}`);
+      }
+    }
+
+    const noteText = noteLines.join('\n');
+
+    const customFields = [];
+    if (workCircumstances) customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
+    if (reasonForChange) customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
+
+    // Create or find GHL contact
+    const contact = await createGHLContact({
+      firstName,
+      lastName,
+      email,
+      phone,
+      locationId: process.env.GHL_LOCATION_ID,
+      source: 'typeform',
+      tags: ['typeform-lead', 'typeform-booked', 'gold-lead', 'webinar-lead'],
+      customFields,
+    });
+
+    const fullName = `${firstName} ${lastName}`.trim() || email;
+    if (contact?.id) {
+      const ghlLink = getContactGHLLink(contact.id);
+      const linkedName = `[${fullName}](${ghlLink})`;
+      discordFields.splice(2, 0, { name: 'Contact', value: linkedName, inline: true });
+
+      // Update tags on existing contact
+      await updateGHLContact(contact.id, {
+        tags: ['typeform-lead', 'typeform-booked', 'gold-lead', 'webinar-lead'],
+        ...(phone && { phone }),
+        ...(firstName && { firstName }),
+        ...(lastName && { lastName }),
+      });
+
+      // Create or move opportunity to booked stage
+      const existing = await findAndUpdateOpportunityStage(contact.id, process.env.GHL_PIPELINE_BOOKED_STAGE_ID);
+      if (!existing) {
+        await createGHLOpportunity(contact, process.env.GHL_PIPELINE_BOOKED_STAGE_ID, tierData);
+      }
+
+      await addGHLNote(contact.id, noteText);
+    }
+
+    const embed = createEmbed('🥇 Webinar Call Booked - £2,997', discordFields, COLORS.GOLD);
+    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Webinar typeform error:', err);
     res.status(500).json({ error: err.message });
   }
 });
