@@ -175,7 +175,7 @@ async function updateGHLContact(contactId, data) {
 
 async function createGHLOpportunity(contact, stageId, tierData) {
   try {
-    const pipelineId = process.env.GHL_PIPELINE_ID;
+    const pipelineId = tierData.pipelineId || process.env.GHL_PIPELINE_ID;
     if (!pipelineId || !stageId || !contact?.id) return null;
     const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'New Lead';
     const response = await axios.post(
@@ -206,10 +206,10 @@ async function createGHLOpportunity(contact, stageId, tierData) {
   }
 }
 
-async function findAndUpdateOpportunityStage(contactId, stageId) {
+async function findAndUpdateOpportunityStage(contactId, stageId, pipelineId) {
   try {
-    const pipelineId = process.env.GHL_PIPELINE_ID;
-    if (!pipelineId || !stageId || !contactId) return null;
+    const targetPipelineId = pipelineId || process.env.GHL_PIPELINE_ID;
+    if (!targetPipelineId || !stageId || !contactId) return null;
     const response = await axios.get(
       `https://services.leadconnectorhq.com/opportunities/search?location_id=${process.env.GHL_LOCATION_ID}&contact_id=${contactId}`,
       {
@@ -220,7 +220,7 @@ async function findAndUpdateOpportunityStage(contactId, stageId) {
       }
     );
     const opportunities = response.data?.opportunities || [];
-    const opportunity = opportunities.find(o => o.pipelineId === pipelineId);
+    const opportunity = opportunities.find(o => o.pipelineId === targetPipelineId);
     if (opportunity) {
       await axios.put(
         `https://services.leadconnectorhq.com/opportunities/${opportunity.id}`,
@@ -579,10 +579,16 @@ router.post('/webinar-webhook', async (req, res) => {
         ...(lastName && { lastName }),
       });
 
-      // Create or move opportunity to booked stage
-      const existing = await findAndUpdateOpportunityStage(contact.id, process.env.GHL_PIPELINE_BOOKED_STAGE_ID);
+      // Create or move opportunity to webinar pipeline booked stage
+      const webinarPipelineId = process.env.GHL_WEBINAR_PIPELINE_ID;
+      const webinarBookedStageId = process.env.GHL_WEBINAR_PIPELINE_BOOKED_STAGE_ID;
+      const existing = await findAndUpdateOpportunityStage(contact.id, webinarBookedStageId, webinarPipelineId);
       if (!existing) {
-        await createGHLOpportunity(contact, process.env.GHL_PIPELINE_BOOKED_STAGE_ID, tierData);
+        await createGHLOpportunity(
+          contact,
+          webinarBookedStageId,
+          { ...tierData, pipelineId: webinarPipelineId }
+        );
       }
 
       await addGHLNote(contact.id, noteText);
