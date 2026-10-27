@@ -34,12 +34,17 @@ function filterTags(tags) {
   return tags.split(',').map(t => t.trim()).filter(t => OUR_TAGS.includes(t)).join(', ');
 }
 
+function getPipelineName(body) {
+  return (body.customData && body.customData.pipeline_name) || body.pipeline_name || '';
+}
+
 function buildCallFields(body, stage) {
   const contactId = body.contact_id || body.contactId || '';
   const fullName = body.full_name ||
     `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
     body.contact_name || 'Unknown';
   const ghlLink = getContactGHLLink(contactId);
+  const pipelineName = getPipelineName(body);
 
   const fields = [
     { name: 'Stage', value: stage, inline: true },
@@ -52,6 +57,7 @@ function buildCallFields(body, stage) {
     { name: 'Date_created', value: body.date_created || '', inline: true },
     { name: 'Contact_source', value: body.contact_source || '', inline: true },
   ];
+  if (pipelineName) fields.push({ name: '📊 Pipeline', value: pipelineName, inline: true });
 
   if (body.booked_by) fields.push({ name: '📋 Booked By (Setter)', value: body.booked_by, inline: true });
   if (body.assigned_to) fields.push({ name: '📞 Assigned To (Closer)', value: body.assigned_to, inline: true });
@@ -67,6 +73,7 @@ function buildStageFields(body, stage) {
     `${body.first_name || ''} ${body.last_name || ''}`.trim() ||
     body.contact_name || 'Unknown';
   const ghlLink = getContactGHLLink(contactId);
+  const pipelineName = getPipelineName(body);
 
   const fields = [
     { name: 'Stage', value: stage, inline: true },
@@ -80,6 +87,7 @@ function buildStageFields(body, stage) {
     { name: 'Contact_source', value: body.contact_source || '', inline: true },
     { name: 'Owner', value: body.assigned_user || '', inline: true },
   ];
+  if (pipelineName) fields.push({ name: '📊 Pipeline', value: pipelineName, inline: true });
 
   if (body.booked_by) fields.push({ name: '📋 Booked By (Setter)', value: body.booked_by, inline: true });
   if (body.assigned_to) fields.push({ name: '📞 Assigned To (Closer)', value: body.assigned_to, inline: true });
