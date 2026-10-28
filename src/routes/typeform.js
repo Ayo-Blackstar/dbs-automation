@@ -594,17 +594,20 @@ router.post('/webinar-webhook', async (req, res) => {
 
     const fullName = `${firstName} ${lastName}`.trim() || email;
     if (contact?.id) {
+      // If they booked, update tags immediately — BEFORE anything else —
+      // so typeform-booked is on the contact before GHL's appointment trigger fires
+      if (hasCalendly) {
+        await updateGHLContact(contact.id, {
+          tags: contactTags,
+          ...(phone && { phone }),
+          ...(firstName && { firstName }),
+          ...(lastName && { lastName }),
+        });
+      }
+
       const ghlLink = getContactGHLLink(contact.id);
       const linkedName = `[${fullName}](${ghlLink})`;
       discordFields.splice(2, 0, { name: 'Contact', value: linkedName, inline: true });
-
-      // Update tags on existing contact
-      await updateGHLContact(contact.id, {
-        tags: contactTags,
-        ...(phone && { phone }),
-        ...(firstName && { firstName }),
-        ...(lastName && { lastName }),
-      });
 
       const webinarPipelineId = process.env.GHL_WEBINAR_PIPELINE_ID;
 
