@@ -478,8 +478,20 @@ router.post('/webinar-webhook', async (req, res) => {
       return res.json({ success: true, skipped: 'no contact info' });
     }
 
-    if (isDuplicateEmail(email)) {
-      return res.json({ success: true, skipped: 'duplicate' });
+    const eventType = payload.event_type || '';
+    const isFinalSubmission = eventType === 'form_response';
+    const isPartial = eventType === 'form_response_partial';
+
+    // For partial responses: skip if already processed (dedup) OR if they booked (final response will handle it)
+    // For final submissions: always process — never dedup, as partial may have run first
+    if (isPartial) {
+      if (hasCalendly) {
+        // Partial with Calendly is unusual — skip, final submission will have it too
+        return res.json({ success: true, skipped: 'partial with calendly — awaiting final' });
+      }
+      if (isDuplicateEmail(email)) {
+        return res.json({ success: true, skipped: 'duplicate partial' });
+      }
     }
 
     // Always gold for webinar
