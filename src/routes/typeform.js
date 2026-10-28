@@ -513,13 +513,22 @@ router.post('/webinar-webhook', async (req, res) => {
         case 'boolean': value = answer.boolean ? 'Yes' : 'No'; break;
         case 'number': value = String(answer.number) || ''; break;
         case 'calendly':
+          // Calendly answer — capture URL, skip adding as a regular field
+          if (!hasCalendly && answer.url) { hasCalendly = true; calendlyValue = answer.url; }
+          return;
         case 'url':
-          if (isCalendlyBookingUrl(answer.url || '')) return;
           value = answer.url || '';
+          if (isCalendlyBookingUrl(value)) {
+            if (!hasCalendly) { hasCalendly = true; calendlyValue = value; }
+            return;
+          }
           break;
         default:
           value = answer.url || answer.text || answer.email || '';
-          if (isCalendlyBookingUrl(value)) return;
+          if (isCalendlyBookingUrl(value)) {
+            if (!hasCalendly) { hasCalendly = true; calendlyValue = value; }
+            return;
+          }
       }
 
       if (value) {
@@ -533,7 +542,8 @@ router.post('/webinar-webhook', async (req, res) => {
     });
 
     if (hasCalendly && calendlyValue) {
-      discordFields.push({ name: 'Call Booking', value: String(calendlyValue).substring(0, 1024), inline: true });
+      discordFields.push({ name: '📅 Call Booking', value: String(calendlyValue).substring(0, 1024), inline: false });
+      noteLines.push(`Call Booking: ${calendlyValue}`);
     }
 
     if (hidden && Object.keys(hidden).length > 0) {
@@ -553,6 +563,11 @@ router.post('/webinar-webhook', async (req, res) => {
     if (workCircumstances) customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
     if (reasonForChange) customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
 
+    // Tags depend on whether they booked a call
+    const contactTags = hasCalendly
+      ? ['typeform-lead', 'typeform-booked', 'gold-lead', 'webinar-lead']
+      : ['typeform-lead', 'gold-lead', 'webinar-lead'];
+
     // Create or find GHL contact
     const contact = await createGHLContact({
       firstName,
@@ -561,7 +576,7 @@ router.post('/webinar-webhook', async (req, res) => {
       phone,
       locationId: process.env.GHL_LOCATION_ID,
       source: 'typeform',
-      tags: ['typeform-lead', 'typeform-booked', 'gold-lead', 'webinar-lead'],
+      tags: contactTags,
       customFields,
     });
 
@@ -573,29 +588,49 @@ router.post('/webinar-webhook', async (req, res) => {
 
       // Update tags on existing contact
       await updateGHLContact(contact.id, {
-        tags: ['typeform-lead', 'typeform-booked', 'gold-lead', 'webinar-lead'],
+        tags: contactTags,
         ...(phone && { phone }),
         ...(firstName && { firstName }),
         ...(lastName && { lastName }),
       });
 
-      // Create or move opportunity to webinar pipeline booked stage
       const webinarPipelineId = process.env.GHL_WEBINAR_PIPELINE_ID;
-      const webinarBookedStageId = process.env.GHL_WEBINAR_PIPELINE_BOOKED_STAGE_ID;
-      const existing = await findAndUpdateOpportunityStage(contact.id, webinarBookedStageId, webinarPipelineId);
-      if (!existing) {
-        await createGHLOpportunity(
-          contact,
-          webinarBookedStageId,
-          { ...tierData, pipelineId: webinarPipelineId }
-        );
+
+      if (hasCalendly) {
+        // Booked — move to booked stage in webinar pipeline
+        const webinarBookedStageId = process.env.GHL_WEBINAR_PIPELINE_BOOKED_STAGE_ID;
+        const existing = await findAndUpdateOpportunityStage(contact.id, webinarBookedStageId, webinarPipelineId);
+        if (!existing) {
+          await createGHLOpportunity(
+            contact,
+            webinarBookedStageId,
+            { ...tierData, pipelineId: webinarPipelineId }
+          );
+        }
+      } else {
+        // Not booked — create opportunity in new lead stage of webinar pipeline
+        const webinarNewLeadStageId = process.env.GHL_WEBINAR_PIPELINE_NEW_LEAD_STAGE_ID || process.env.GHL_PIPELINE_STAGE_ID;
+        const existing = await findAndUpdateOpportunityStage(contact.id, webinarNewLeadStageId, webinarPipelineId);
+        if (!existing) {
+          await createGHLOpportunity(
+            contact,
+            webinarNewLeadStageId,
+            { ...tierData, pipelineId: webinarPipelineId }
+          );
+        }
       }
 
       await addGHLNote(contact.id, noteText);
     }
 
-    const embed = createEmbed('🥇 Webinar Call Booked - £2,997', discordFields, COLORS.GOLD);
-    await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
+    if (hasCalendly) {
+      const embed = createEmbed('🥇 Webinar Call Booked - £2,997', discordFields, COLORS.GOLD);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
+    } else {
+      // No Calendly — lead filled form but didn't book, send to new leads
+      const embed = createEmbed('🥇 New Webinar Lead - £2,997', discordFields, COLORS.GOLD);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
+    }
 
     res.json({ success: true });
   } catch (err) {
