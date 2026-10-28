@@ -479,20 +479,12 @@ router.post('/webinar-webhook', async (req, res) => {
     }
 
     const eventType = payload.event_type || '';
-    const isFinalSubmission = eventType === 'form_response';
     const isPartial = eventType === 'form_response_partial';
+    const isFinal = eventType === 'form_response';
 
-    // For partial responses: skip if already processed (dedup) OR if they booked (final response will handle it)
-    // For final submissions: always process — never dedup, as partial may have run first
-    if (isPartial) {
-      if (hasCalendly) {
-        // Partial with Calendly is unusual — skip, final submission will have it too
-        return res.json({ success: true, skipped: 'partial with calendly — awaiting final' });
-      }
-      if (isDuplicateEmail(email)) {
-        return res.json({ success: true, skipped: 'duplicate partial' });
-      }
-    }
+    // Partial: send to new leads only — no typeform-booked, no Calendly processing
+    // Final: always process fully — adds typeform-booked if Calendly present
+    // Never dedup between partial and final — they must both run
 
     // Always gold for webinar
     const tierData = {
@@ -575,10 +567,8 @@ router.post('/webinar-webhook', async (req, res) => {
     if (workCircumstances) customFields.push({ id: 'pM6OspnbLUhfs16LW3JT', value: workCircumstances });
     if (reasonForChange) customFields.push({ id: 'kCPReLZORsoy7HsJNiDQ', value: reasonForChange });
 
-    // Tags depend on whether they booked a call
-    const contactTags = hasCalendly
-      ? ['typeform-lead', 'typeform-booked', 'gold-lead', 'webinar-lead']
-      : ['typeform-lead', 'gold-lead', 'webinar-lead'];
+    // Base tags — typeform-booked is added separately on final+Calendly via updateGHLContact
+    const contactTags = ['typeform-lead', 'gold-lead', 'webinar-lead'];
 
     // Create or find GHL contact
     const contact = await createGHLContact({
@@ -594,55 +584,49 @@ router.post('/webinar-webhook', async (req, res) => {
 
     const fullName = `${firstName} ${lastName}`.trim() || email;
     if (contact?.id) {
-      // If they booked, update tags immediately — BEFORE anything else —
-      // so typeform-booked is on the contact before GHL's appointment trigger fires
-      if (hasCalendly) {
-        await updateGHLContact(contact.id, {
-          tags: contactTags,
-          ...(phone && { phone }),
-          ...(firstName && { firstName }),
-          ...(lastName && { lastName }),
-        });
-      }
-
       const ghlLink = getContactGHLLink(contact.id);
       const linkedName = `[${fullName}](${ghlLink})`;
       discordFields.splice(2, 0, { name: 'Contact', value: linkedName, inline: true });
 
-      const webinarPipelineId = process.env.GHL_WEBINAR_PIPELINE_ID;
+      if (isFinal && hasCalendly) {
+        // Final submission with booking — add typeform-booked FIRST before anything else
+        // This must land before GHL's appointment trigger fires the setter workflow
+        await updateGHLContact(contact.id, {
+          tags: ['typeform-lead', 'typeform-booked', 'gold-lead', 'webinar-lead'],
+          ...(phone && { phone }),
+          ...(firstName && { firstName }),
+          ...(lastName && { lastName }),
+        });
 
-      if (hasCalendly) {
-        // Booked — move to booked stage in webinar pipeline
+        const webinarPipelineId = process.env.GHL_WEBINAR_PIPELINE_ID;
         const webinarBookedStageId = process.env.GHL_WEBINAR_PIPELINE_BOOKED_STAGE_ID;
         const existing = await findAndUpdateOpportunityStage(contact.id, webinarBookedStageId, webinarPipelineId);
         if (!existing) {
-          await createGHLOpportunity(
-            contact,
-            webinarBookedStageId,
-            { ...tierData, pipelineId: webinarPipelineId }
-          );
+          await createGHLOpportunity(contact, webinarBookedStageId, { ...tierData, pipelineId: webinarPipelineId });
         }
-      } else {
-        // Not booked — create opportunity in new lead stage of webinar pipeline
+      } else if (isPartial && !hasCalendly) {
+        // Partial — no booking yet, create opportunity in new lead stage
+        const webinarPipelineId = process.env.GHL_WEBINAR_PIPELINE_ID;
         const webinarNewLeadStageId = process.env.GHL_WEBINAR_PIPELINE_NEW_LEAD_STAGE_ID || process.env.GHL_PIPELINE_STAGE_ID;
         const existing = await findAndUpdateOpportunityStage(contact.id, webinarNewLeadStageId, webinarPipelineId);
         if (!existing) {
-          await createGHLOpportunity(
-            contact,
-            webinarNewLeadStageId,
-            { ...tierData, pipelineId: webinarPipelineId }
-          );
+          await createGHLOpportunity(contact, webinarNewLeadStageId, { ...tierData, pipelineId: webinarPipelineId });
         }
       }
 
       await addGHLNote(contact.id, noteText);
     }
 
-    if (hasCalendly) {
+    if (isPartial && !hasCalendly) {
+      // Partial with no Calendly — new lead, send to new leads channel only
+      const embed = createEmbed('🥇 New Webinar Lead - £2,997', discordFields, COLORS.GOLD);
+      await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
+    } else if (isFinal && hasCalendly) {
+      // Final submission with Calendly — booked call
       const embed = createEmbed('🥇 Webinar Call Booked - £2,997', discordFields, COLORS.GOLD);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_BOOKED_CALLS, embed);
-    } else {
-      // No Calendly — lead filled form but didn't book, send to new leads
+    } else if (isFinal && !hasCalendly) {
+      // Final submission without Calendly — they submitted but didn't book, treat as new lead
       const embed = createEmbed('🥇 New Webinar Lead - £2,997', discordFields, COLORS.GOLD);
       await sendDiscordMessage(process.env.DISCORD_WEBHOOK_NEW_LEADS, embed);
     }
